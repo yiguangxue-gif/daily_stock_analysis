@@ -196,7 +196,7 @@ jobs:
           echo "  AstrBot: $([ -n "$ASTRBOT_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "=========================================="
           echo ""
-         # 执行分析
+          # 执行分析 (注意这里要和上面的 echo 对齐)
           if [ "$MODE" = "market-only" ]; then
             python main.py --market-review --force-run
           elif [ "$MODE" = "stocks-only" ]; then
@@ -204,7 +204,6 @@ jobs:
           else
             python main.py --force-run
           fi
-      
       - name: 上传分析报告
         uses: actions/upload-artifact@v4
         if: always()
