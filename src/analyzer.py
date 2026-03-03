@@ -1160,7 +1160,6 @@ class GeminiAnalyzer:
             news_context: 预先搜索的新闻内容
         """
         code = context.get('code', 'Unknown')
-        
         # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
@@ -1168,8 +1167,49 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
+        # ========== [微创手术开始] 植入个人持仓成本逻辑 ==========
+        personal_status_text = ""
+        try:
+            # 1. 从环境变量获取我们的私人成本账本
+            import os
+            my_costs_str = os.environ.get("MY_STOCK_COSTS", "")
+            
+            # 2. 如果账本不为空，开始解析
+            if my_costs_str:
+                cost_dict = {}
+                # 把 "000768:35.50, 601728:5.20" 变成字典
+                for item in my_costs_str.split(','):
+                    if ':' in item:
+                        c, p = item.split(':')
+                        cost_dict[c.strip()] = float(p.strip())
+                
+                # 3. 检查当前分析的股票是否在我们的账本里
+                my_cost = cost_dict.get(code)
+                current_price = today.get('close')
+                
+                # 4. 如果有成本价，并且获取到了当前价，组装一段给 AI 的“最高指令”
+                if my_cost and current_price and current_price != 'N/A':
+                    current_price = float(current_price)
+                    profit_pct = ((current_price - my_cost) / my_cost) * 100
+                    
+                    status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
+                    
+                    personal_status_text = f"""
+### 💰 [最高指令] 我的私人持仓状态
+* **我的建仓成本**：{my_cost:.2f} 元
+* **当前浮动盈亏**：{profit_pct:.2f}% ({status_emoji})
+* **分析要求**：
+  1. 必须在报告的显著位置明确提及我的【建仓成本】和【当前盈亏状态】。
+  2. 操作建议必须结合我的成本：如果严重套牢，请给出是否割肉或做T的建议；如果已经盈利，请给出止盈目标。
+  3. 如果趋势向好但我的成本较高，不要盲目建议“买入”，应提示解套策略。
+"""
+        except Exception as e:
+            logger.error(f"解析个人持仓成本失败: {e}")
+        # ========== [微创手术结束] ==========
+
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
+{personal_status_text} 
 
 ## 📊 股票基础信息
 | 项目 | 数据 |
