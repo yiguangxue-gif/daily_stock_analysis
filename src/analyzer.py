@@ -1173,69 +1173,68 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-# ========== [微创手术开始] 云端仓位 + AI 记忆双引擎 ==========
+# ========== [微创手术开始] 云端仓位+AI记忆+主力资金+RSI超级引擎 ==========
         personal_status_text = ""
-        debug_msg = ""
         try:
-            import os
-            import urllib.request
-            import csv
-            import io
-            import glob
+            import os, urllib.request, csv, io, glob
+            import akshare as ak
+            import pandas as pd
             
-            # 【引擎 1：云端仓位读取】
+            # 【1. 云端仓位与盈亏计算】
             csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
-            my_cost = None
-            my_shares = None
-            current_price = today.get('close')
-            
-            if current_price and current_price != 'N/A':
+            my_cost, my_shares = None, None
+            curr_price = today.get('close')
+            if curr_price and curr_price != 'N/A':
                 req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    content = response.read().decode('utf-8-sig')
+                with urllib.request.urlopen(req, timeout=15) as res:
+                    content = res.read().decode('utf-8-sig')
                     reader = csv.reader(io.StringIO(content))
                     for row in reader:
                         if len(row) >= 2 and row[0].strip():
-                            row_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
-                            if row_code == code:
+                            r_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
+                            if r_code == code:
                                 my_cost = float(str(row[1]).replace(',', '').strip())
                                 my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
-                                break
-                
                 if my_cost:
-                    current_price = float(current_price)
-                    profit_pct = ((current_price - my_cost) / my_cost) * 100
+                    profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
                     status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
-                    shares_info = f"\n* **当前持仓**：{my_shares} 股" if my_shares else ""
-                    personal_status_text += f"""
-### 💰 [最高指令] 我的私人持仓状态 (云端实时同步)
-* **我的建仓成本**：{my_cost:.2f} 元{shares_info}
-* **当前浮动盈亏**：{profit_pct:.2f}% ({status_emoji})
-* **要求**：【大空头风控官】必须对我的盈亏进行施压，并在核心结论中给出极度具体的【解套】或【止盈】点位。
-"""
+                    personal_status_text += f"\n### 💰 我的私人持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n"
 
-            # 【引擎 2：AI 昨日记忆提取】
-            # 去找本地保存的往期报告日记
+            # 【2. 主力资金流向 - 白嫖东方财富数据】
+            try:
+                fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
+                latest_flow = fund_flow.iloc[-1]
+                flow_desc = f"主力净流入: {latest_flow['主力净流入-净额']/10000:.1f}万, 超大单占比: {latest_flow['超大单净流入-净额']/latest_flow['主力净流入-净额']*100:.1f}%" if latest_flow['主力净流入-净额'] != 0 else "资金变动微小"
+                personal_status_text += f"\n### 🌊 聪明钱动向\n* **今日资金流**：{flow_desc}\n"
+            except: pass
+
+            # 【3. RSI 技术指标 - 防止追高】
+            try:
+                # 基于 context 中已有的历史数据计算
+                if 'history' in context:
+                    prices = [d['close'] for d in context['history']]
+                    delta = pd.Series(prices).diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
+                    rs = gain / loss
+                    rsi6 = 100 - (100 / (1 + rs.iloc[-1]))
+                    rsi_warning = "⚠️ 严重超买 (RSI>80)，严禁追高！" if rsi6 > 80 else "✅ 处于安全区间" if rsi6 > 20 else "💡 严重超跌 (RSI<20)，底部临近"
+                    personal_status_text += f"### 📊 情绪极值 (RSI)\n* **6日RSI指标**：{rsi6:.1f} ({rsi_warning})\n"
+            except: pass
+
+            # 【4. AI 昨日记忆提取】
             report_files = glob.glob("reports/report_*.md")
-            report_files.sort() # 按时间排序，确保取到的是最近的一份
-            
-            if len(report_files) > 0:
-                latest_report = report_files[-1]
-                with open(latest_report, 'r', encoding='utf-8') as f:
+            report_files.sort()
+            if report_files:
+                with open(report_files[-1], 'r', encoding='utf-8') as f:
                     past_content = f.read()
-                
-                # 寻找旧报告中关于这只股票的段落
                 stock_idx = past_content.find(f"({code})")
                 if stock_idx != -1:
-                    # 截取大约 400 个字符的结论片段喂给今天的 AI
-                    past_snippet = past_content[stock_idx:stock_idx+400]
-                    personal_status_text += f"""
-### 🧠 [记忆中枢] 你的历史复盘记录
-以下是你（AI）在上一次分析该股票时给出的结论切片：
-```text
-...{past_snippet}...
+                    personal_status_text += f"\n### 🧠 上次分析回顾\n```text\n{past_content[stock_idx:stock_idx+350]}...\n```\n* **对比与连贯性要求**：今日跌幅{today.get('pct_chg')}%，请对比上次结论，若走势相反必须复盘反思原因，保持策略不漂移。\n"
 
-        # ========== 构建决策仪表盘格式的输入 ==========
+        except Exception as e:
+            logger.error(f"超级引擎加载失败: {e}")
+        # ========== [微创手术结束] ==========
         prompt = f"""# 决策仪表盘分析请求
 {personal_status_text} 
 
