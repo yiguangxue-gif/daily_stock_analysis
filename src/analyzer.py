@@ -1149,31 +1149,31 @@ class GeminiAnalyzer:
                 error_message=str(e),
             )
     
-    def _format_prompt(
-        self, 
-        context: Dict[str, Any], 
-        name: str,
-        news_context: Optional[str] = None
-    ) -> str:
-        """
-        格式化分析提示词（决策仪表盘 v2.0）
+def _format_prompt(
+    self, 
+    context: Dict[str, Any], 
+    name: str,
+    news_context: Optional[str] = None
+) -> str:
+    """
+    格式化分析提示词（决策仪表盘 v2.0）
+    
+    包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
+    
+    Args:
+        context: 技术面数据上下文（包含增强数据）
+        name: 股票名称（默认值，可能被上下文覆盖）
+        news_context: 预先搜索的新闻内容
+    """
+    code = context.get('code', 'Unknown')
+    # 优先使用上下文中的股票名称（从 realtime_quote 获取）
+    stock_name = context.get('stock_name', name)
+    if not stock_name or stock_name == f'股票{code}':
+        stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
         
-        包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
-        
-        Args:
-            context: 技术面数据上下文（包含增强数据）
-            name: 股票名称（默认值，可能被上下文覆盖）
-            news_context: 预先搜索的新闻内容
-        """
-        code = context.get('code', 'Unknown')
-        # 优先使用上下文中的股票名称（从 realtime_quote 获取）
-        stock_name = context.get('stock_name', name)
-        if not stock_name or stock_name == f'股票{code}':
-            stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
-            
-        today = context.get('today', {})
-        
-# ========== [微创手术开始] 八边形终极引擎 (外资追踪 + 胜率打脸系统) ==========
+    today = context.get('today', {})
+    
+    # ========== [微创手术开始] 八边形终极引擎 (外资追踪 + 胜率打脸系统) ==========
     personal_status_text = ""
     try:
         import os, urllib.request, csv, io, glob
@@ -1182,7 +1182,7 @@ class GeminiAnalyzer:
         from datetime import datetime
         
         # 【1. 云端仓位与盈亏计算】
-        csv_url = "[https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv](https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv)"
+        csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
         my_cost, my_shares = None, None
         curr_price = today.get('close')
         if curr_price and curr_price != 'N/A':
@@ -1207,7 +1207,8 @@ class GeminiAnalyzer:
             latest_flow = fund_flow.iloc[-1]
             flow_desc = f"主力净流入: {latest_flow['主力净流入-净额']/10000:.1f}万" if latest_flow['主力净流入-净额'] != 0 else "微小"
             personal_status_text += f"\n### 🌊 聪明钱动向 (内资)\n* **今日资金流**：{flow_desc}\n"
-        except: pass
+        except: 
+            pass
 
         # 【3. 深度暗网雷达：北向外资追踪】
         try:
@@ -1218,7 +1219,8 @@ class GeminiAnalyzer:
                 hk_change = my_hk.iloc[0]['今日增持估计-市值']
                 action_str = "🟢流入" if hk_change > 0 else "🔴砸盘流出"
                 personal_status_text += f"### 🕵️‍♂️ 外资(北向)追踪\n* **北向资金持股比例**：{hk_hold}%\n* **今日外资动向**：{action_str} {abs(hk_change)/10000:.1f}万元\n* **博弈指令**：请结合内资与外资的流向，判断当前是“内外资合力砸盘”还是“外资抄底内资出逃”的分歧状态！\n"
-        except: pass
+        except: 
+            pass
 
         # 【4. RSI 技术极值与板块共振】
         try:
@@ -1233,7 +1235,8 @@ class GeminiAnalyzer:
             top_up = industry_df.head(3)['板块名称'].tolist()
             top_down = industry_df.tail(3)['板块名称'].tolist()
             personal_status_text += f"* **今日领涨板块**：{', '.join(top_up)} | **领跌板块**：{', '.join(top_down)}\n"
-        except: pass
+        except: 
+            pass
 
         # 【5. AI 闭环回测与胜率打脸系统 (自动建库)】
         try:
@@ -1273,12 +1276,15 @@ class GeminiAnalyzer:
                 stock_idx = past_content.find(f"({code})")
                 if stock_idx != -1:
                     personal_status_text += f"\n### 🧠 上次分析日记\n{past_content[stock_idx:stock_idx+350]}...\n"
-        except: pass
+        except: 
+            pass
 
     except Exception as e:
         pass # 极致容错，绝不让程序崩溃
     # ========== [微创手术结束] ==========
-        prompt = f"""# 决策仪表盘分析请求
+    
+    # 构建prompt的核心内容（注意：这部分要确保缩进正确，属于_format_prompt函数内部）
+    prompt = f"""# 决策仪表盘分析请求
 {personal_status_text} 
 
 ## 📊 股票基础信息
@@ -1311,11 +1317,11 @@ class GeminiAnalyzer:
 | MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
 | 均线形态 | {context.get('ma_status', '未知')} | 多头/空头/缠绕 |
 """
-        
-        # 添加实时行情数据（量比、换手率等）
-        if 'realtime' in context:
-            rt = context['realtime']
-            prompt += f"""
+    
+    # 添加实时行情数据（量比、换手率等）
+    if 'realtime' in context:
+        rt = context['realtime']
+        prompt += f"""
 ### 实时行情增强数据
 | 指标 | 数值 | 解读 |
 |------|------|------|
@@ -1328,12 +1334,12 @@ class GeminiAnalyzer:
 | 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
 | 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
 """
-        
-        # 添加筹码分布数据
-        if 'chip' in context:
-            chip = context['chip']
-            profit_ratio = chip.get('profit_ratio', 0)
-            prompt += f"""
+    
+    # 添加筹码分布数据
+    if 'chip' in context:
+        chip = context['chip']
+        profit_ratio = chip.get('profit_ratio', 0)
+        prompt += f"""
 ### 筹码分布数据（效率指标）
 | 指标 | 数值 | 健康标准 |
 |------|------|----------|
@@ -1343,12 +1349,12 @@ class GeminiAnalyzer:
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
 """
-        
-        # 添加趋势分析结果（基于交易理念的预判）
-        if 'trend_analysis' in context:
-            trend = context['trend_analysis']
-            bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
-            prompt += f"""
+    
+    # 添加趋势分析结果（基于交易理念的预判）
+    if 'trend_analysis' in context:
+        trend = context['trend_analysis']
+        bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
+        prompt += f"""
 ### 趋势分析预判（基于交易理念）
 | 指标 | 数值 | 判定 |
 |------|------|------|
@@ -1368,24 +1374,24 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
-        
-        # 添加昨日对比数据
-        if 'yesterday' in context:
-            volume_change = context.get('volume_change_ratio', 'N/A')
-            prompt += f"""
+    
+    # 添加昨日对比数据
+    if 'yesterday' in context:
+        volume_change = context.get('volume_change_ratio', 'N/A')
+        prompt += f"""
 ### 量价变化
 - 成交量较昨日变化：{volume_change}倍
 - 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
 """
-        
-        # 添加新闻搜索结果（重点区域）
-        prompt += """
+    
+    # 添加新闻搜索结果（重点区域）
+    prompt += """
 ---
 
 ## 📰 舆情情报
 """
-        if news_context:
-            prompt += f"""
+    if news_context:
+        prompt += f"""
 以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
 2. 🎯 **利好催化**：业绩、合同、政策
