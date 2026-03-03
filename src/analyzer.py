@@ -1225,17 +1225,30 @@ class GeminiAnalyzer:
         # 【4. RSI 技术极值与板块共振】
         try:
             if 'history' in context:
-                prices = [d['close'] for d in context['history']]
-                delta = pd.Series(prices).diff()
-                rs = (delta.where(delta > 0, 0)).rolling(window=6).mean() / (-delta.where(delta < 0, 0)).rolling(window=6).mean()
-                rsi6 = 100 - (100 / (1 + rs.iloc[-1]))
-                personal_status_text += f"\n### 📊 技术情绪\n* **6日RSI**：{rsi6:.1f} (若>80则严重超买，严禁追高)\n"
-            
-            industry_df = ak.stock_board_industry_name_em()
-            top_up = industry_df.head(3)['板块名称'].tolist()
-            top_down = industry_df.tail(3)['板块名称'].tolist()
-            personal_status_text += f"* **今日领涨板块**：{', '.join(top_up)} | **领跌板块**：{', '.join(top_down)}\n"
-        except: 
+                prices = [d['close'] for d in context['history'] if d.get('close')]
+                if len(prices) >= 7:
+                    delta = pd.Series(prices).diff()
+
+                    gain = delta.where(delta > 0, 0.0)
+                    loss = -delta.where(delta < 0, 0.0)
+
+                    avg_gain = gain.rolling(window=6).mean()
+                    avg_loss = loss.rolling(window=6).mean()
+
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
+
+                    latest_rsi = rsi.iloc[-1]
+
+                    if latest_rsi < 30:
+                        rsi_status = "🔵超卖区"
+                    elif latest_rsi > 70:
+                        rsi_status = "🔴超买区"
+                    else:
+                        rsi_status = "⚪中性区"
+
+                    personal_status_text += f"\n### 📉 RSI 技术状态\n* **RSI(6)**：{latest_rsi:.2f} ({rsi_status})\n"
+        except Exception:
             pass
 
         # 【5. AI 闭环回测与胜率打脸系统 (自动建库)】
