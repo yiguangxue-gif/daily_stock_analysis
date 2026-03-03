@@ -1183,7 +1183,7 @@ class GeminiAnalyzer:
             import io
             
             # 1. 获取链接并清理前后隐形空格
-            csv_url = os.environ.get("POSITION_CSV_URL", "").strip()
+            csv_url = os.environ.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv", "").strip()
             my_cost = None
             my_shares = None
             current_price = today.get('close')
