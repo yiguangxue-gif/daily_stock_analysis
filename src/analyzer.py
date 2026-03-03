@@ -1149,12 +1149,12 @@ class GeminiAnalyzer:
                 error_message=str(e),
             )
     
-def _format_prompt(
-    self, 
-    context: Dict[str, Any], 
-    name: str,
-    news_context: Optional[str] = None
-) -> str:
+    def _format_prompt(
+        self, 
+        context: Dict[str, Any], 
+        name: str,
+        news_context: Optional[str] = None
+    ) -> str:
     """
     格式化分析提示词（决策仪表盘 v2.0）
     
