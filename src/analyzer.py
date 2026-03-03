@@ -1173,40 +1173,49 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-# ========== [微创手术开始] 云端动态仓位逻辑 ==========
+# ========== [手术开始] 云端动态仓位逻辑 V2 (自带纠错诊断) ==========
         personal_status_text = ""
+        debug_msg = ""
         try:
             import os
             import urllib.request
             import csv
             import io
             
-            # 获取你在 GitHub Secrets 里配置的表格链接
-            csv_url = os.environ.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv", "")
+            # 1. 获取链接并清理前后隐形空格
+            csv_url = os.environ.get("POSITION_CSV_URL", "").strip()
             my_cost = None
             my_shares = None
             current_price = today.get('close')
             
-            if csv_url and current_price and current_price != 'N/A':
-                # 1. 模拟浏览器发送网络请求，抓取你的 Google 表格数据
-                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    content = response.read().decode('utf-8')
+            if not csv_url:
+                debug_msg = "⚠️ [系统雷达] 未检测到云端表格链接 (POSITION_CSV_URL 为空)，请检查 GitHub Secrets 和 YAML 文件。"
+            elif not current_price or current_price == 'N/A':
+                debug_msg = "⚠️ [系统雷达] 未获取到今日最新股价，跳过盈亏计算。"
+            else:
+                # 2. 抓取表格 (伪装成浏览器，防止被 Google 拦截)
+                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    # 使用 utf-8-sig 完美秒杀 Google 表格的幽灵 BOM 乱码
+                    content = response.read().decode('utf-8-sig')
                     reader = csv.reader(io.StringIO(content))
                     
-                    # 2. 一行行读取表格内容
+                    found_code = False
                     for row in reader:
-                        # 确保这行至少有两列（代码和成本），并且不是空行
                         if len(row) >= 2 and row[0].strip():
-                            # 修复 Google 表格自动吞掉前导零的问题（把 768 变成 000768）
-                            row_code = str(row[0]).strip().split('.')[0].zfill(6)
+                            # 极致清理：去除一切非数字的字符，然后补齐6位
+                            raw_code = ''.join(filter(str.isdigit, str(row[0])))
+                            row_code = raw_code.zfill(6)
                             
-                            # 如果表格里的代码和当前正在分析的股票代码匹配上了！
+                            # 如果匹配上当前股票
                             if row_code == code:
-                                my_cost = float(row[1].strip())
-                                # 如果你填了第三列（股数），也顺便抓取下来
-                                my_shares = int(float(row[2].strip())) if len(row) >= 3 and row[2].strip() else 0
-                                break # 找到了就退出循环
+                                found_code = True
+                                my_cost = float(str(row[1]).replace(',', '').strip())
+                                my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
+                                break
+                    
+                    if not found_code:
+                        debug_msg = f"💡 [系统雷达] 在您的 Google 表格中，没有找到代码为 {code} 的持仓记录。"
                 
                 # 3. 组装给 AI 的最高指令
                 if my_cost:
@@ -1220,13 +1229,18 @@ class GeminiAnalyzer:
 * **我的建仓成本**：{my_cost:.2f} 元{shares_info}
 * **当前浮动盈亏**：{profit_pct:.2f}% ({status_emoji})
 * **分析要求**：
-  1. 必须在报告显著位置显示我的云端持仓状态。
-  2. 首席大法官和风控官必须针对我当前的盈亏状态进行施压和建议（比如：套牢了就痛斥早该止损，盈利了就恐吓即将回调）。
-  3. 最终操作建议必须明确给出结合我成本的【解套】或【止盈】策略。
+  1. 必须在报告开头显著位置，原封不动地展示我的云端持仓状态！
+  2. 【大空头风控官】必须针对我当前的盈亏进行猛烈施压（套牢就痛斥，盈利就警告回撤风险）。
+  3. 最终操作建议必须结合我的成本，给出极度具体的【解套】或【止盈】点位。
 """
         except Exception as e:
-            logger.error(f"读取云端仓位表失败: {e}")
-        # ========== [微创手术结束] ==========
+            debug_msg = f"❌ [系统报错] 读取云端表格失败，程序崩溃: {e}"
+            logger.error(debug_msg)
+            
+        # 如果读取失败，就把报错信息强行塞给 AI，让它打印在邮件里！
+        if debug_msg and not personal_status_text:
+            personal_status_text = f"\n{debug_msg}\n"
+        # ========== [手术结束] ==========
 
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
