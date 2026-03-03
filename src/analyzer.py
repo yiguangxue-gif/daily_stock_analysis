@@ -1173,7 +1173,7 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-# ========== [微创手术开始] 云端动态仓位逻辑 V3 (核弹级硬编码) ==========
+# ========== [微创手术开始] 云端仓位 + AI 记忆双引擎 ==========
         personal_status_text = ""
         debug_msg = ""
         try:
@@ -1181,64 +1181,59 @@ class GeminiAnalyzer:
             import urllib.request
             import csv
             import io
+            import glob
             
-            # 【核弹级修改】去他的环境变量！直接把链接写死在这里！
+            # 【引擎 1：云端仓位读取】
             csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
-            
             my_cost = None
             my_shares = None
             current_price = today.get('close')
             
-            if not current_price or current_price == 'N/A':
-                debug_msg = "⚠️ [系统雷达] 未获取到今日最新股价，跳过盈亏计算。"
-            else:
-                # 2. 抓取表格 (伪装成浏览器)
-                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            if current_price and current_price != 'N/A':
+                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=15) as response:
                     content = response.read().decode('utf-8-sig')
                     reader = csv.reader(io.StringIO(content))
-                    
-                    found_code = False
                     for row in reader:
                         if len(row) >= 2 and row[0].strip():
-                            # 极致清洗：去除一切非数字的字符，然后补齐6位
-                            raw_code = ''.join(filter(str.isdigit, str(row[0])))
-                            row_code = raw_code.zfill(6)
-                            
-                            # 如果匹配上当前股票
+                            row_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
                             if row_code == code:
-                                found_code = True
                                 my_cost = float(str(row[1]).replace(',', '').strip())
                                 my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
                                 break
-                    
-                    if not found_code:
-                        debug_msg = f"💡 [系统雷达] 在您的 Google 表格中，没有找到代码为 {code} 的持仓记录。"
                 
-                # 3. 组装给 AI 的最高指令
                 if my_cost:
                     current_price = float(current_price)
                     profit_pct = ((current_price - my_cost) / my_cost) * 100
                     status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
                     shares_info = f"\n* **当前持仓**：{my_shares} 股" if my_shares else ""
-                    
-                    personal_status_text = f"""
+                    personal_status_text += f"""
 ### 💰 [最高指令] 我的私人持仓状态 (云端实时同步)
 * **我的建仓成本**：{my_cost:.2f} 元{shares_info}
 * **当前浮动盈亏**：{profit_pct:.2f}% ({status_emoji})
-* **分析要求**：
-  1. 必须在报告开头显著位置，原封不动地展示我的云端持仓状态！
-  2. 【大空头风控官】必须针对我当前的盈亏进行猛烈施压（套牢就痛斥，盈利就警告回撤风险）。
-  3. 最终操作建议必须结合我的成本，给出极度具体的【解套】或【止盈】点位。
+* **要求**：【大空头风控官】必须对我的盈亏进行施压，并在核心结论中给出极度具体的【解套】或【止盈】点位。
 """
-        except Exception as e:
-            debug_msg = f"❌ [系统报错] 读取云端表格失败，程序崩溃: {e}"
-            logger.error(debug_msg)
+
+            # 【引擎 2：AI 昨日记忆提取】
+            # 去找本地保存的往期报告日记
+            report_files = glob.glob("reports/report_*.md")
+            report_files.sort() # 按时间排序，确保取到的是最近的一份
             
-        # 如果出错，强制印在邮件上
-        if debug_msg and not personal_status_text:
-            personal_status_text = f"\n{debug_msg}\n"
-        # ========== [微创手术结束] ==========
+            if len(report_files) > 0:
+                latest_report = report_files[-1]
+                with open(latest_report, 'r', encoding='utf-8') as f:
+                    past_content = f.read()
+                
+                # 寻找旧报告中关于这只股票的段落
+                stock_idx = past_content.find(f"({code})")
+                if stock_idx != -1:
+                    # 截取大约 400 个字符的结论片段喂给今天的 AI
+                    past_snippet = past_content[stock_idx:stock_idx+400]
+                    personal_status_text += f"""
+### 🧠 [记忆中枢] 你的历史复盘记录
+以下是你（AI）在上一次分析该股票时给出的结论切片：
+```text
+...{past_snippet}...
 
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
