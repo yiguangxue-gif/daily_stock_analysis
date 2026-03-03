@@ -137,13 +137,12 @@ jobs:
           SERVERCHAN3_SENDKEY: ${{ secrets.SERVERCHAN3_SENDKEY }}
 
           # ==========================================
+# ==========================================
           # 自选股配置
           # ==========================================
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
-          # 👇👇👇 下面这是我们要新增的一行 👇👇👇
-          #MY_STOCK_COSTS: ${{ secrets.MY_STOCK_COSTS }}
-          POSITION_CSV_URL: ${{ secrets.POSITION_CSV_URL }}
+          POSITION_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
           # ==========================================
           # 运行配置 ⬅️ 新增！
           # ==========================================
