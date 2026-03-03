@@ -1249,7 +1249,7 @@ class GeminiAnalyzer:
 
                     personal_status_text += f"\n### 📉 RSI 技术状态\n* **RSI(6)**：{latest_rsi:.2f} ({rsi_status})\n"
         except Exception:
-            pass
+             pass
 
         # 【5. AI 闭环回测与胜率打脸系统 (自动建库)】
         try:
