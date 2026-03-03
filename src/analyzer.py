@@ -1173,14 +1173,14 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-# ========== [微创手术开始] 云端仓位+AI记忆+主力资金+RSI超级引擎 ==========
+# ========== [微创手术开始] 云端仓位+AI记忆+主力资金+RSI+板块共振 六边形引擎 ==========
         personal_status_text = ""
         try:
             import os, urllib.request, csv, io, glob
             import akshare as ak
             import pandas as pd
             
-            # 【1. 云端仓位与盈亏计算】
+            # 【1. 云端仓位与盈亏计算 - 冷血大法官升级版】
             csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
             my_cost, my_shares = None, None
             curr_price = today.get('close')
@@ -1198,9 +1198,9 @@ class GeminiAnalyzer:
                 if my_cost:
                     profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
                     status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
-                    personal_status_text += f"\n### 💰 我的私人持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n"
+                    personal_status_text += f"\n### 💰 我的私人持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 法官最高指令**：用户目前处于{status_emoji}状态。如果套牢超过5%，你必须在作战计划中给出极其具体的【分批割肉止损价】，严禁使用“注意风险”、“建议观望”等废话！必须冷血、客观！\n"
 
-            # 【2. 主力资金流向 - 白嫖东方财富数据】
+            # 【2. 主力资金流向】
             try:
                 fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
                 latest_flow = fund_flow.iloc[-1]
@@ -1208,9 +1208,8 @@ class GeminiAnalyzer:
                 personal_status_text += f"\n### 🌊 聪明钱动向\n* **今日资金流**：{flow_desc}\n"
             except: pass
 
-            # 【3. RSI 技术指标 - 防止追高】
+            # 【3. RSI 技术指标】
             try:
-                # 基于 context 中已有的历史数据计算
                 if 'history' in context:
                     prices = [d['close'] for d in context['history']]
                     delta = pd.Series(prices).diff()
@@ -1222,18 +1221,28 @@ class GeminiAnalyzer:
                     personal_status_text += f"### 📊 情绪极值 (RSI)\n* **6日RSI指标**：{rsi6:.1f} ({rsi_warning})\n"
             except: pass
 
-            # 【4. AI 昨日记忆提取】
-            report_files = glob.glob("reports/report_*.md")
-            report_files.sort()
-            if report_files:
-                with open(report_files[-1], 'r', encoding='utf-8') as f:
-                    past_content = f.read()
-                stock_idx = past_content.find(f"({code})")
-                if stock_idx != -1:
-                    personal_status_text += f"\n### 🧠 上次分析回顾\n```text\n{past_content[stock_idx:stock_idx+350]}...\n```\n* **对比与连贯性要求**：今日跌幅{today.get('pct_chg')}%，请对比上次结论，若走势相反必须复盘反思原因，保持策略不漂移。\n"
+            # 【4. 行业板块共振 (防错杀雷达)】
+            try:
+                industry_df = ak.stock_board_industry_name_em()
+                top_up = industry_df.head(5)['板块名称'].tolist()
+                top_down = industry_df.tail(5)['板块名称'].tolist()
+                personal_status_text += f"\n### 🌍 大盘与板块环境\n* **今日领涨板块**：{', '.join(top_up)}\n* **今日领跌板块**：{', '.join(top_down)}\n* **分析要求**：请结合板块表现判断该股今日走势是【个股独立暴雷/爆发】还是受【板块整体环境】拖累/带动？\n"
+            except: pass
+
+            # 【5. AI 昨日记忆提取】
+            try:
+                report_files = glob.glob("reports/report_*.md")
+                report_files.sort()
+                if report_files:
+                    with open(report_files[-1], 'r', encoding='utf-8') as f:
+                        past_content = f.read()
+                    stock_idx = past_content.find(f"({code})")
+                    if stock_idx != -1:
+                        personal_status_text += f"\n### 🧠 上次分析回顾\n```text\n{past_content[stock_idx:stock_idx+350]}...\n```\n* **打脸与反思指令**：今日涨跌幅为{today.get('pct_chg')}。请对比你上次的结论，若走势完全相反，必须在风险警报中【深刻复盘反思原因】，保持策略的连贯性，追踪原先设定的支撑/压力位。\n"
+            except: pass
 
         except Exception as e:
-            logger.error(f"超级引擎加载失败: {e}")
+            logger.error(f"六边形引擎加载失败: {e}")
         # ========== [微创手术结束] ==========
         prompt = f"""# 决策仪表盘分析请求
 {personal_status_text} 
