@@ -1173,7 +1173,7 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-# ========== [手术开始] 云端动态仓位逻辑 V2 (自带纠错诊断) ==========
+# ========== [微创手术开始] 云端动态仓位逻辑 V3 (核弹级硬编码) ==========
         personal_status_text = ""
         debug_msg = ""
         try:
@@ -1182,28 +1182,26 @@ class GeminiAnalyzer:
             import csv
             import io
             
-            # 1. 获取链接并清理前后隐形空格
-            csv_url = os.environ.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv", "").strip()
+            # 【核弹级修改】去他的环境变量！直接把链接写死在这里！
+            csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
+            
             my_cost = None
             my_shares = None
             current_price = today.get('close')
             
-            if not csv_url:
-                debug_msg = "⚠️ [系统雷达] 未检测到云端表格链接 (POSITION_CSV_URL 为空)，请检查 GitHub Secrets 和 YAML 文件。"
-            elif not current_price or current_price == 'N/A':
+            if not current_price or current_price == 'N/A':
                 debug_msg = "⚠️ [系统雷达] 未获取到今日最新股价，跳过盈亏计算。"
             else:
-                # 2. 抓取表格 (伪装成浏览器，防止被 Google 拦截)
+                # 2. 抓取表格 (伪装成浏览器)
                 req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
                 with urllib.request.urlopen(req, timeout=15) as response:
-                    # 使用 utf-8-sig 完美秒杀 Google 表格的幽灵 BOM 乱码
                     content = response.read().decode('utf-8-sig')
                     reader = csv.reader(io.StringIO(content))
                     
                     found_code = False
                     for row in reader:
                         if len(row) >= 2 and row[0].strip():
-                            # 极致清理：去除一切非数字的字符，然后补齐6位
+                            # 极致清洗：去除一切非数字的字符，然后补齐6位
                             raw_code = ''.join(filter(str.isdigit, str(row[0])))
                             row_code = raw_code.zfill(6)
                             
@@ -1237,10 +1235,10 @@ class GeminiAnalyzer:
             debug_msg = f"❌ [系统报错] 读取云端表格失败，程序崩溃: {e}"
             logger.error(debug_msg)
             
-        # 如果读取失败，就把报错信息强行塞给 AI，让它打印在邮件里！
+        # 如果出错，强制印在邮件上
         if debug_msg and not personal_status_text:
             personal_status_text = f"\n{debug_msg}\n"
-        # ========== [手术结束] ==========
+        # ========== [微创手术结束] ==========
 
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
