@@ -233,3 +233,18 @@ jobs:
             echo "📜 最近日志（最后 30 行）:"
             tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
           fi
+          else
+            python main.py --force-run
+          fi
+          
+      - name: 保存报告到仓库（为AI注入永久记忆）
+        continue-on-error: true
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git commit -m "📝 存档今日研报，形成AI记忆 [skip ci]" || echo "无新报告"
+          git push
+          
+      - name: 上传分析报告
+        uses: actions/upload-artifact@v4
