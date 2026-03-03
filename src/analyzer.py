@@ -1182,7 +1182,7 @@ class GeminiAnalyzer:
             import io
             
             # 获取你在 GitHub Secrets 里配置的表格链接
-            csv_url = os.environ.get("POSITION_CSV_URL", "")
+            csv_url = os.environ.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv", "")
             my_cost = None
             my_shares = None
             current_price = today.get('close')
