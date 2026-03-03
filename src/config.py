@@ -196,11 +196,11 @@ class Config:
     https_proxy: Optional[str] = None # HTTPS 代理
     
     # === 定时任务配置 ===
-    schedule_enabled: bool = False            # 是否启用定时任务
-    schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
-    schedule_run_immediately: bool = True     # 启动时是否立即执行一次
-    run_immediately: bool = True              # 启动时是否立即执行一次（非定时模式）
-    market_review_enabled: bool = True        # 是否启用大盘复盘
+    schedule_enabled: bool = False             # 是否启用定时任务
+    schedule_time: str = "18:00"               # 每日推送时间（HH:MM 格式）
+    schedule_run_immediately: bool = True      # 启动时是否立即执行一次
+    run_immediately: bool = True               # 启动时是否立即执行一次（非定时模式）
+    market_review_enabled: bool = True         # 是否启用大盘复盘
     # 大盘复盘市场区域：cn(A股)、us(美股)、both(两者)，us 适合仅关注美股的用户
     market_review_region: str = "cn"
     # 交易日检查：默认启用，非交易日跳过执行；设为 false 或 --force-run 可强制执行（Issue #373）
@@ -249,10 +249,10 @@ class Config:
     webui_port: int = 8000
     
     # === 机器人配置 ===
-    bot_enabled: bool = True              # 是否启用机器人功能
-    bot_command_prefix: str = "/"         # 命令前缀
-    bot_rate_limit_requests: int = 10     # 频率限制：窗口内最大请求数
-    bot_rate_limit_window: int = 60       # 频率限制：窗口时间（秒）
+    bot_enabled: bool = True               # 是否启用机器人功能
+    bot_command_prefix: str = "/"          # 命令前缀
+    bot_rate_limit_requests: int = 10      # 频率限制：窗口内最大请求数
+    bot_rate_limit_window: int = 60        # 频率限制：窗口时间（秒）
     bot_admin_users: List[str] = field(default_factory=list)  # 管理员用户 ID 列表
     
     # 飞书机器人（事件订阅）- 已有 feishu_app_id, feishu_app_secret
@@ -685,12 +685,50 @@ class Config:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         return f"sqlite:///{db_path.absolute()}"
 
-
-# === 便捷的配置访问函数 ===
 def get_config() -> Config:
-    """获取全局配置实例的快捷方式"""
-    return Config.get_instance()
-
+    """
+    获取全局配置实例（单例模式）
+    
+    在第一次调用时初始化配置，后续调用返回同一实例。
+    """
+    global _config_instance
+    if '_config_instance' not in globals() or _config_instance is None:
+        _config_instance = Config.get_instance()
+        
+        # ========== [微创手术开始] Google表格接管股票列表 ==========
+        try:
+            import urllib.request
+            import csv
+            import io
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            # 这里是你专属的云端表格链接
+            csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
+            req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as res:
+                content = res.read().decode('utf-8-sig')
+                reader = csv.reader(io.StringIO(content))
+                
+                # 提取第一列的股票代码
+                cloud_stocks = []
+                for row in reader:
+                    if len(row) > 0 and row[0].strip():
+                        # 只提取数字，补齐6位
+                        s_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
+                        if s_code and len(s_code) >= 5: # 兼容港股美股格式的话这里可以放宽，但A股是6位
+                            cloud_stocks.append(s_code)
+                            
+                # 如果成功从表格读到了代码，就强行覆盖原本的 STOCK_LIST
+                if cloud_stocks:
+                    _config_instance.stock_list = cloud_stocks
+                    logger.info(f"🚀 已成功从 Google 表格接管股票列表: {cloud_stocks}")
+        except Exception as e:
+            # 如果断网或表格打不开，就静默失败，使用原本在 GitHub 设置的默认列表
+            pass
+        # ========== [微创手术结束] ==========
+        
+    return _config_instance
 
 if __name__ == "__main__":
     # 测试配置加载
