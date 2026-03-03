@@ -1155,149 +1155,96 @@ class GeminiAnalyzer:
         name: str,
         news_context: Optional[str] = None
     ) -> str:
-    """
-    格式化分析提示词（决策仪表盘 v2.0）
-    
-    包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
-    
-    Args:
-        context: 技术面数据上下文（包含增强数据）
-        name: 股票名称（默认值，可能被上下文覆盖）
-        news_context: 预先搜索的新闻内容
-    """
-    code = context.get('code', 'Unknown')
-    # 优先使用上下文中的股票名称（从 realtime_quote 获取）
-    stock_name = context.get('stock_name', name)
-    if not stock_name or stock_name == f'股票{code}':
-        stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
+        """
+        格式化分析提示词（决策仪表盘 v2.0）
         
-    today = context.get('today', {})
-    
-    # ========== [微创手术开始] 八边形终极引擎 (外资追踪 + 胜率打脸系统) ==========
-    personal_status_text = ""
-    try:
-        import os, urllib.request, csv, io, glob
-        import akshare as ak
-        import pandas as pd
-        from datetime import datetime
+        包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
         
-        # 【1. 云端仓位与盈亏计算】
-        csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
-        my_cost, my_shares = None, None
-        curr_price = today.get('close')
-        if curr_price and curr_price != 'N/A':
-            req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as res:
-                content = res.read().decode('utf-8-sig')
-                reader = csv.reader(io.StringIO(content))
-                for row in reader:
-                    if len(row) >= 2 and row[0].strip():
-                        r_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
-                        if r_code == code:
-                            my_cost = float(str(row[1]).replace(',', '').strip())
-                            my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
-            if my_cost:
-                profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
-                status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
-                personal_status_text += f"\n### 💰 我的私人持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 法官最高指令**：用户目前处于{status_emoji}状态。如果套牢超过5%，你必须给出极其具体的【分批割肉止损价】，严禁使用“注意风险”、“建议观望”等废话！\n"
-
-        # 【2. 主力内资流向】
+        Args:
+            context: 技术面数据上下文（包含增强数据）
+            name: 股票名称（默认值，可能被上下文覆盖）
+            news_context: 预先搜索的新闻内容
+        """
+        code = context.get('code', 'Unknown')
+        # 优先使用上下文中的股票名称（从 realtime_quote 获取）
+        stock_name = context.get('stock_name', name)
+        if not stock_name or stock_name == f'股票{code}':
+            stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
+            
+        today = context.get('today', {})
+        
+# ========== [微创手术开始] 云端仓位+AI记忆+主力资金+RSI+板块共振 六边形引擎 ==========
+        personal_status_text = ""
         try:
-            fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
-            latest_flow = fund_flow.iloc[-1]
-            flow_desc = f"主力净流入: {latest_flow['主力净流入-净额']/10000:.1f}万" if latest_flow['主力净流入-净额'] != 0 else "微小"
-            personal_status_text += f"\n### 🌊 聪明钱动向 (内资)\n* **今日资金流**：{flow_desc}\n"
-        except: 
-            pass
+            import os, urllib.request, csv, io, glob
+            import akshare as ak
+            import pandas as pd
+            
+            # 【1. 云端仓位与盈亏计算 - 冷血大法官升级版】
+            csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
+            my_cost, my_shares = None, None
+            curr_price = today.get('close')
+            if curr_price and curr_price != 'N/A':
+                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as res:
+                    content = res.read().decode('utf-8-sig')
+                    reader = csv.reader(io.StringIO(content))
+                    for row in reader:
+                        if len(row) >= 2 and row[0].strip():
+                            r_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
+                            if r_code == code:
+                                my_cost = float(str(row[1]).replace(',', '').strip())
+                                my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
+                if my_cost:
+                    profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
+                    status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
+                    personal_status_text += f"\n### 💰 我的私人持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 法官最高指令**：用户目前处于{status_emoji}状态。如果套牢超过5%，你必须在作战计划中给出极其具体的【分批割肉止损价】，严禁使用“注意风险”、“建议观望”等废话！必须冷血、客观！\n"
 
-        # 【3. 深度暗网雷达：北向外资追踪】
-        try:
-            hk_funds = ak.stock_hsgt_stock_statistics_em()
-            my_hk = hk_funds[hk_funds['代码'] == code]
-            if not my_hk.empty:
-                hk_hold = my_hk.iloc[0]['持股比例']
-                hk_change = my_hk.iloc[0]['今日增持估计-市值']
-                action_str = "🟢流入" if hk_change > 0 else "🔴砸盘流出"
-                personal_status_text += f"### 🕵️‍♂️ 外资(北向)追踪\n* **北向资金持股比例**：{hk_hold}%\n* **今日外资动向**：{action_str} {abs(hk_change)/10000:.1f}万元\n* **博弈指令**：请结合内资与外资的流向，判断当前是“内外资合力砸盘”还是“外资抄底内资出逃”的分歧状态！\n"
-        except: 
-            pass
+            # 【2. 主力资金流向】
+            try:
+                fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
+                latest_flow = fund_flow.iloc[-1]
+                flow_desc = f"主力净流入: {latest_flow['主力净流入-净额']/10000:.1f}万, 超大单占比: {latest_flow['超大单净流入-净额']/latest_flow['主力净流入-净额']*100:.1f}%" if latest_flow['主力净流入-净额'] != 0 else "资金变动微小"
+                personal_status_text += f"\n### 🌊 聪明钱动向\n* **今日资金流**：{flow_desc}\n"
+            except: pass
 
-        # 【4. RSI 技术极值与板块共振】
-        try:
-            if 'history' in context:
-                prices = [d['close'] for d in context['history'] if d.get('close')]
-                if len(prices) >= 7:
+            # 【3. RSI 技术指标】
+            try:
+                if 'history' in context:
+                    prices = [d['close'] for d in context['history']]
                     delta = pd.Series(prices).diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
+                    rs = gain / loss
+                    rsi6 = 100 - (100 / (1 + rs.iloc[-1]))
+                    rsi_warning = "⚠️ 严重超买 (RSI>80)，严禁追高！" if rsi6 > 80 else "✅ 处于安全区间" if rsi6 > 20 else "💡 严重超跌 (RSI<20)，底部临近"
+                    personal_status_text += f"### 📊 情绪极值 (RSI)\n* **6日RSI指标**：{rsi6:.1f} ({rsi_warning})\n"
+            except: pass
 
-                    gain = delta.where(delta > 0, 0.0)
-                    loss = -delta.where(delta < 0, 0.0)
+            # 【4. 行业板块共振 (防错杀雷达)】
+            try:
+                industry_df = ak.stock_board_industry_name_em()
+                top_up = industry_df.head(5)['板块名称'].tolist()
+                top_down = industry_df.tail(5)['板块名称'].tolist()
+                personal_status_text += f"\n### 🌍 大盘与板块环境\n* **今日领涨板块**：{', '.join(top_up)}\n* **今日领跌板块**：{', '.join(top_down)}\n* **分析要求**：请结合板块表现判断该股今日走势是【个股独立暴雷/爆发】还是受【板块整体环境】拖累/带动？\n"
+            except: pass
 
-                    avg_gain = gain.rolling(window=6).mean()
-                    avg_loss = loss.rolling(window=6).mean()
+            # 【5. AI 昨日记忆提取】
+            try:
+                report_files = glob.glob("reports/report_*.md")
+                report_files.sort()
+                if report_files:
+                    with open(report_files[-1], 'r', encoding='utf-8') as f:
+                        past_content = f.read()
+                    stock_idx = past_content.find(f"({code})")
+                    if stock_idx != -1:
+                        personal_status_text += f"\n### 🧠 上次分析回顾\n```text\n{past_content[stock_idx:stock_idx+350]}...\n```\n* **打脸与反思指令**：今日涨跌幅为{today.get('pct_chg')}。请对比你上次的结论，若走势完全相反，必须在风险警报中【深刻复盘反思原因】，保持策略的连贯性，追踪原先设定的支撑/压力位。\n"
+            except: pass
 
-                    rs = avg_gain / avg_loss
-                    rsi = 100 - (100 / (1 + rs))
-
-                    latest_rsi = rsi.iloc[-1]
-
-                    if latest_rsi < 30:
-                        rsi_status = "🔵超卖区"
-                    elif latest_rsi > 70:
-                        rsi_status = "🔴超买区"
-                    else:
-                        rsi_status = "⚪中性区"
-
-                    personal_status_text += f"\n### 📉 RSI 技术状态\n* **RSI(6)**：{latest_rsi:.2f} ({rsi_status})\n"
-        except Exception:
-             pass
-
-        # 【5. AI 闭环回测与胜率打脸系统 (自动建库)】
-        try:
-            db_file = "reports/ai_trade_log.csv"
-            today_str = today.get('date', datetime.now().strftime('%Y-%m-%d'))
-            file_exists = os.path.isfile(db_file)
-            
-            # 静默记录今天的真实收盘价
-            with open(db_file, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(['Date', 'Code', 'ClosePrice'])
-                writer.writerow([today_str, code, curr_price])
-            
-            # 提取历史价格进行绩效处刑
-            if file_exists:
-                df_log = pd.read_csv(db_file)
-                df_code = df_log[df_log['Code'] == code].tail(3)
-                if len(df_code) >= 2:
-                    past_price = float(df_code.iloc[-2]['ClosePrice'])
-                    past_date = df_code.iloc[-2]['Date']
-                    curr_p = float(curr_price)
-                    ai_impact = ((curr_p - past_price) / past_price) * 100
-                    status_judge = "❌ 导致亏损" if ai_impact < 0 else "✅ 成功获利"
-                    
-                    personal_status_text += f"\n### ⚖️ 绩效审判庭 (实盘回测)\n* **上次分析时 ({past_date}) 股价**：{past_price:.2f}元\n* **当前最新股价**：{curr_p:.2f}元\n* **区间真实涨跌**：{ai_impact:.2f}% ({status_judge})\n* **【处刑指令】**：这是系统对你的硬核绩效考核！如果区间涨跌为负（说明你前几天看走眼了），你必须在【核心结论】开头，进行**深刻的自我检讨（明确认错）**，并立刻调整为防守模型！严禁嘴硬！\n"
         except Exception as e:
-            pass # 忽略数据库报错，不影响主流程
-
-        # 【6. AI 提取往期报告切片】
-        try:
-            report_files = glob.glob("reports/report_*.md")
-            report_files.sort()
-            if report_files:
-                with open(report_files[-1], 'r', encoding='utf-8') as f:
-                    past_content = f.read()
-                stock_idx = past_content.find(f"({code})")
-                if stock_idx != -1:
-                    personal_status_text += f"\n### 🧠 上次分析日记\n{past_content[stock_idx:stock_idx+350]}...\n"
-        except: 
-            pass
-
-    except Exception as e:
-        pass # 极致容错，绝不让程序崩溃
-    # ========== [微创手术结束] ==========
-    
-    # 构建prompt的核心内容（注意：这部分要确保缩进正确，属于_format_prompt函数内部）
-    prompt = f"""# 决策仪表盘分析请求
+            logger.error(f"六边形引擎加载失败: {e}")
+        # ========== [微创手术结束] ==========
+        prompt = f"""# 决策仪表盘分析请求
 {personal_status_text} 
 
 ## 📊 股票基础信息
@@ -1330,11 +1277,11 @@ class GeminiAnalyzer:
 | MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
 | 均线形态 | {context.get('ma_status', '未知')} | 多头/空头/缠绕 |
 """
-    
-    # 添加实时行情数据（量比、换手率等）
-    if 'realtime' in context:
-        rt = context['realtime']
-        prompt += f"""
+        
+        # 添加实时行情数据（量比、换手率等）
+        if 'realtime' in context:
+            rt = context['realtime']
+            prompt += f"""
 ### 实时行情增强数据
 | 指标 | 数值 | 解读 |
 |------|------|------|
@@ -1347,12 +1294,12 @@ class GeminiAnalyzer:
 | 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
 | 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
 """
-    
-    # 添加筹码分布数据
-    if 'chip' in context:
-        chip = context['chip']
-        profit_ratio = chip.get('profit_ratio', 0)
-        prompt += f"""
+        
+        # 添加筹码分布数据
+        if 'chip' in context:
+            chip = context['chip']
+            profit_ratio = chip.get('profit_ratio', 0)
+            prompt += f"""
 ### 筹码分布数据（效率指标）
 | 指标 | 数值 | 健康标准 |
 |------|------|----------|
@@ -1362,12 +1309,12 @@ class GeminiAnalyzer:
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
 """
-    
-    # 添加趋势分析结果（基于交易理念的预判）
-    if 'trend_analysis' in context:
-        trend = context['trend_analysis']
-        bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
-        prompt += f"""
+        
+        # 添加趋势分析结果（基于交易理念的预判）
+        if 'trend_analysis' in context:
+            trend = context['trend_analysis']
+            bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
+            prompt += f"""
 ### 趋势分析预判（基于交易理念）
 | 指标 | 数值 | 判定 |
 |------|------|------|
@@ -1387,24 +1334,24 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
-    
-    # 添加昨日对比数据
-    if 'yesterday' in context:
-        volume_change = context.get('volume_change_ratio', 'N/A')
-        prompt += f"""
+        
+        # 添加昨日对比数据
+        if 'yesterday' in context:
+            volume_change = context.get('volume_change_ratio', 'N/A')
+            prompt += f"""
 ### 量价变化
 - 成交量较昨日变化：{volume_change}倍
 - 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
 """
-    
-    # 添加新闻搜索结果（重点区域）
-    prompt += """
+        
+        # 添加新闻搜索结果（重点区域）
+        prompt += """
 ---
 
 ## 📰 舆情情报
 """
-    if news_context:
-        prompt += f"""
+        if news_context:
+            prompt += f"""
 以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
 2. 🎯 **利好催化**：业绩、合同、政策
