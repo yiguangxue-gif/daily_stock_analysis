@@ -15,6 +15,7 @@ A股自选股智能分析系统 - AI分析层
 import json
 import logging
 import time
+import re
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from json_repair import repair_json
@@ -500,8 +501,13 @@ class GeminiAnalyzer:
 
     def _init_model(self) -> None:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self._api_key)
+            # 兼容 google.genai 或 google.generativeai
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=self._api_key)
+            except ImportError:
+                pass
+            
             config = get_config()
             model_name = config.gemini_model
             fallback_model = config.gemini_model_fallback
@@ -534,8 +540,10 @@ class GeminiAnalyzer:
             )
             self._current_model_name = fallback_model
             self._using_fallback = True
+            logger.warning(f"🔄 [Gemini] 触发防宕机降级机制，成功切换到备选模型: {fallback_model}")
             return True
         except Exception as e:
+            logger.error(f"❌ [Gemini] 切换备选模型失败: {e}")
             return False
 
     def is_available(self) -> bool:
@@ -654,7 +662,8 @@ class GeminiAnalyzer:
             return self._call_openai_api(prompt, generation_config)
 
         config = get_config()
-        max_retries = max(config.gemini_max_retries, 5)
+        # 强制提高保底重试次数到 8 次，确保哪怕高频限流也能最终熬过去
+        max_retries = max(config.gemini_max_retries, 8)
         base_delay = config.gemini_retry_delay
         
         last_error = None
@@ -681,19 +690,21 @@ class GeminiAnalyzer:
                 if is_rate_limit:
                     logger.warning(f"[Gemini] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:150]}")
                     
-                    import re
+                    # 动态读取 Google 报错里要求等待的精确秒数
                     match = re.search(r'retry in (\d+\.?\d*)s', error_str)
                     if match:
-                        delay = float(match.group(1)) + 2.0
+                        # 增加 5 秒缓冲，避免因为微妙级误差导致下次依然被封禁
+                        delay = float(match.group(1)) + 5.0
                     else:
                         delay = min(base_delay * (2 ** attempt), 60)
                         
                     if attempt >= max_retries // 2 and not tried_fallback:
+                        logger.info("⚠️ [Gemini] 已达最大重试阈值的一半，尝试切换备用模型...")
                         if self._switch_to_fallback_model():
                             tried_fallback = True
-                            delay = 2
+                            # 【核心修复】不要把 delay 设为 2！同一个 API key 切换模型依然受限，必须等够要求的时间
                             
-                    logger.info(f"[Gemini] 触发限流，强制休眠等待恢复 {delay:.2f} 秒...")
+                    logger.info(f"⏳ [Gemini] 触发限流，强制休眠等待 API 额度恢复 {delay:.2f} 秒...")
                     time.sleep(delay)
                 else:
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
@@ -797,7 +808,7 @@ class GeminiAnalyzer:
             )
     
     # =====================================================================
-    # 【注意】：以下所有辅助方法必须严格缩进 4 个空格，确保它们属于 GeminiAnalyzer 类！
+    # 辅助方法
     # =====================================================================
 
     def _safe_float(self, val: Any) -> Optional[float]:
@@ -946,7 +957,6 @@ class GeminiAnalyzer:
         # ========== [微创手术结束] ==========
         
         fallback_hints = ""
-        cp_val = self._safe_float(today.get('close'))
         if cp_val:
             fallback_hints = f"🚨 **防宕机硬指令**：即使没有均线数据，止损位必须填 `{cp_val * 0.95:.2f}元`，目标位填 `{cp_val * 1.08:.2f}元`，仓位给 `20%`。绝对不准输出 N/A！"
 
