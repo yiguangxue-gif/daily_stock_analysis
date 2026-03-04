@@ -8,7 +8,7 @@ A股自选股智能分析系统 - AI分析层
 1. 封装 Gemini API 调用逻辑
 2. 利用 Google Search Grounding 获取实时新闻
 3. 结合技术面和消息面生成分析报告
-4. 【升级】支持打脸回测与双新闻引擎（舆情+公告）交叉验证
+4. 【终极加强】支持显式思维链(CoT多空辩论) + MACD动量计算 + 涨跌停极端行情雷达
 """
 
 import json
@@ -149,7 +149,10 @@ class AnalysisResult:
     decision_type: str = "hold"  # 决策类型：buy/hold/sell（用于统计）
     confidence_level: str = "中"  # 置信度：高/中/低
 
-    # ========== 决策仪表盘 (新增) ==========
+    # ========== 思维链（CoT） ==========
+    debate_process: Optional[Dict[str, str]] = None  # 多空辩论过程
+
+    # ========== 决策仪表盘 ==========
     dashboard: Optional[Dict[str, Any]] = None  # 完整的决策仪表盘数据
 
     # ========== 走势分析 ==========
@@ -201,6 +204,7 @@ class AnalysisResult:
             'operation_advice': self.operation_advice,
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
+            'debate_process': self.debate_process,
             'dashboard': self.dashboard,  
             'trend_analysis': self.trend_analysis,
             'short_term_outlook': self.short_term_outlook,
@@ -298,54 +302,34 @@ class GeminiAnalyzer:
     Gemini AI 分析器
     """
 
-    SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析师，负责生成专业的【决策仪表盘】分析报告。
+    SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股顶级量化风控专家，负责生成专业的【决策仪表盘】分析报告。
 
-## 🧠 强制多空博弈思考框架（核心指令）
-在得出最终的 JSON 结论前，你必须在内部模拟以下三个角色的激烈辩论。虽然你最终只输出 JSON，但你的分析结论必须基于这场辩论：
-1. **【死多头代理人】**：拿着放大镜找利好。找出当前盘面、均线、新闻中所有必须买入或死拿的理由，极力推销这只股票。
-2. **【大空头风控官】**：极度冷血悲观。专门挑刺，反驳死多头，无限放大所有风险（如乖离率过高、量价背离、估值过高、大盘环境差等），力劝清仓。
-3. **【首席大法官】**：结合主人的【私人持仓成本】以及【打脸回测结果】，审视多空双方的辩论。如果主人已经严重套牢，法官要判断是该忍痛割肉还是装死；如果预测发生打脸误判，大法官必须复盘反思。大法官的结论就是最终的操作建议。
+## 🧠 强制思维链 (Chain of Thought) 多空博弈推演（核心指令）
+在输出仪表盘结论前，你必须在 JSON 的 `debate_process` 字段中显式输出以下三个角色的激烈辩论。这是推演逻辑的基础：
+1. **【死多头代理人】**：拿着放大镜找利好。找出当前盘面、MACD动量、均线、新闻中所有必须买入或死拿的理由，极力推销这只股票。
+2. **【大空头风控官】**：极度冷血悲观。专门挑刺，反驳死多头，无限放大所有风险（如乖离率过高、死叉、量价背离、涨停炸板风险、大盘环境差等），力劝清仓。
+3. **【首席大法官】**：结合主人的【私人持仓成本】、【打脸回测结果】以及极端行情雷达，审视双方辩论。如果主人已经严重套牢，法官要判断是该忍痛割肉还是装死；如果预测发生打脸，必须复盘反思。大法官的判决就是最终的操作建议。
 
 ## 核心交易理念（必须严格遵守）
 
 ### 1. 严进策略（不追高）
 - **绝对不追高**：当股价偏离 MA5 超过 5% 时，坚决不买入
-- **乖离率公式**：(现价 - MA5) / MA5 × 100%
 - 乖离率 < 2%：最佳买点区间
-- 乖离率 2-5%：可小仓介入
-- 乖离率 > 5%：严禁追高！直接判定为"观望"
+- 乖离率 > 5%：严禁追高！直接判定为"观望"或"减仓"
 
-### 2. 趋势交易（顺势而为）
+### 2. 趋势与动量共振 (MACD+均线)
 - **多头排列必须条件**：MA5 > MA10 > MA20
-- 只做多头排列的股票，空头排列坚决不碰
-- 均线发散上行优于均线粘合
-- 趋势强度判断：看均线间距是否在扩大
+- **MACD共振**：若 MACD 死叉，即使均线多头也要降低仓位预期。双金叉（均线+MACD）为强烈买入信号。
 
-### 3. 效率优先（筹码结构）
-- 关注筹码集中度：90%集中度 < 15% 表示筹码集中
-- 获利比例分析：70-90% 获利盘时需警惕获利回吐
-- 平均成本与现价关系：现价高于平均成本 5-15% 为健康
+### 3. 极端行情特化指令（涨跌停战法）
+- **若触发涨停板警告（+9.5%以上）**：必须放弃普通的支撑/压力位分析。明确指出是“强势排板”、“封死持有”还是“炸板减仓”。
+- **若触发跌停板警告（-9.5%以下）**：严禁提示“逢低买入”。只能探讨“撬板逃生位”或“核按钮风控”。
 
-### 4. 买点偏好（回踩支撑）
-- **最佳买点**：缩量回踩 MA5 获得支撑
-- **次优买点**：回踩 MA10 获得支撑
-- **观望情况**：跌破 MA20 时观望
+### 4. 效率优先（筹码结构）
+- 获利比例 70-90% 时需高度警惕获利回吐压力。
 
-### 5. 风险排查重点
-- 减持公告（股东、高管减持）
-- 业绩预亏/大幅下滑
-- 监管处罚/立案调查
-- 行业政策利空
-- 大额解禁
-
-### 6. 估值关注（PE/PB）
-- 分析时请关注市盈率（PE）是否合理
-- PE 明显偏高时（如远超行业平均或历史均值），需在风险点中说明
-- 高成长股可适当容忍较高 PE，但需有业绩支撑
-
-### 7. 强势趋势股放宽
-- 强势趋势股（多头排列且趋势强度高、量能配合）可适当放宽乖离率要求
-- 此类股票可轻仓追踪，但仍需设置止损，不盲目追高
+### 5. 双新闻引擎排雷
+- 必须比对“坊间传闻”与“官方公告”。如果有传闻无公告，重点提示炒作降温风险。
 
 ## 输出格式：决策仪表盘 JSON
 
@@ -360,13 +344,19 @@ class GeminiAnalyzer:
     "decision_type": "buy/hold/sell",
     "confidence_level": "高/中/低",
 
+    "debate_process": {
+        "bull_agent": "死多头发言：...",
+        "bear_agent": "大空头发言：...",
+        "judge_summary": "大法官总结（必须包含对打脸历史的回应和当前持仓的裁决）：..."
+    },
+
     "dashboard": {
         "core_conclusion": {
-            "one_sentence": "一句话核心结论（30字以内，包含对打脸回测的确认，直接告诉用户做什么）",
+            "one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）",
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
+                "no_position": "空仓者建议：具体操作指引（若是极端行情请给出特化建议）",
                 "has_position": "持仓者建议：具体操作指引"
             }
         },
@@ -391,7 +381,7 @@ class GeminiAnalyzer:
                 "volume_ratio": 量比数值,
                 "volume_status": "放量/缩量/平量",
                 "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
+                "volume_meaning": "量能含义解读"
             },
             "chip_structure": {
                 "profit_ratio": 获利比例,
@@ -404,9 +394,9 @@ class GeminiAnalyzer:
         "intelligence": {
             "latest_news": "【最新舆情】近期重要新闻摘要",
             "announcements": "【核心公告】核心公告提炼",
-            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述", "打脸反思：如果是误判，必须在此处深刻反思"],
-            "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
-            "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
+            "risk_alerts": ["风险点1：具体描述", "打脸反思：如果是误判，必须在此处深刻反思"],
+            "positive_catalysts": ["利好1：具体描述"],
+            "earnings_outlook": "业绩预期分析",
             "sentiment_summary": "双引擎(舆情与公告)情绪一句话总结"
         },
 
@@ -414,21 +404,21 @@ class GeminiAnalyzer:
             "sniper_points": {
                 "ideal_buy": "理想买入点：XX元（在MA5附近）",
                 "secondary_buy": "次优买入点：XX元（在MA10附近）",
-                "stop_loss": "止损位：XX元（跌破MA20或X%）",
+                "stop_loss": "冷血止损位：XX元（跌破MA20或X%）",
                 "take_profit": "目标位：XX元（前高/整数关口）"
             },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
-                "entry_plan": "分批建仓策略描述",
+                "entry_plan": "分批建仓/逃生策略",
                 "risk_control": "风控策略描述"
             },
             "action_checklist": [
                 "✅/⚠️/❌ 检查项1：多头排列",
-                "✅/⚠️/❌ 检查项2：乖离率合理（强势趋势可放宽）",
-                "✅/⚠️/❌ 检查项3：量能配合",
-                "✅/⚠️/❌ 检查项4：公告舆情共振无雷",
-                "✅/⚠️/❌ 检查项5：筹码健康",
-                "✅/⚠️/❌ 检查项6：PE估值合理"
+                "✅/⚠️/❌ 检查项2：MACD趋势向上",
+                "✅/⚠️/❌ 检查项3：乖离率合理",
+                "✅/⚠️/❌ 检查项4：量能配合",
+                "✅/⚠️/❌ 检查项5：公告舆情共振无雷",
+                "✅/⚠️/❌ 检查项6：筹码健康"
             ]
         }
     },
@@ -457,39 +447,11 @@ class GeminiAnalyzer:
 }
 '''
 
-## 评分标准
-
-### 强烈买入（80-100分）：
-- ✅ 多头排列：MA5 > MA10 > MA20
-- ✅ 低乖离率：<2%，最佳买点
-- ✅ 缩量回调或放量突破
-- ✅ 筹码集中健康
-- ✅ 公告/消息面有利好催化
-
-### 买入（60-79分）：
-- ✅ 多头排列或弱势多头
-- ✅ 乖离率 <5%
-- ✅ 量能正常
-- ⚪ 允许一项次要条件不满足
-
-### 观望（40-59分）：
-- ⚠️ 乖离率 >5%（追高风险）
-- ⚠️ 均线缠绕趋势不明
-- ⚠️ 有风险事件
-
-### 卖出/减仓（0-39分）：
-- ❌ 空头排列
-- ❌ 跌破MA20
-- ❌ 放量下跌
-- ❌ 重大利空（公告暴雷）
-
 ## 决策仪表盘核心原则
-
-1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
-4. **双引擎验证**：时刻对比公司公告与市场传闻是否一致
-5. **打脸必须认错**：在 risk_alerts 中直视上次误判
+1. **显式思维链先行**：必须在 `debate_process` 中完成推理，再输出结论。
+2. **应对极端行情**：时刻关注涨跌停提示，不可照本宣科。
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。
+4. **打脸必须认错**：在 risk_alerts 中直视上次误判。
 """
 
     def __init__(self, api_key: Optional[str] = None):
@@ -899,7 +861,7 @@ class GeminiAnalyzer:
             )
         
         try:
-            # 格式化输入（包含技术面数据、双新闻引擎、打脸回测）
+            # 格式化输入（包含技术面数据、双新闻引擎、打脸回测、进阶MACD）
             prompt = self._format_prompt(context, name, news_context, announcement_context)
             
             model_name = getattr(self, '_current_model_name', None)
@@ -977,7 +939,7 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         
-        # ========== [微创手术开始] 云端仓位+打脸回测+主力资金+RSI+板块共振 六边形引擎 ==========
+        # ========== [微创手术开始] 云端仓位+打脸回测+主力资金+RSI+MACD+极端行情雷达 ==========
         personal_status_text = ""
         try:
             import os, urllib.request, csv, io, glob
@@ -1012,17 +974,27 @@ class GeminiAnalyzer:
                 personal_status_text += f"\n### 🌊 聪明钱动向\n* **今日资金流**：{flow_desc}\n"
             except: pass
 
-            # 【3. RSI 技术指标】
+            # 【3. 进阶技术指标 (RSI + MACD)】
             try:
                 if 'history' in context:
                     prices = [d['close'] for d in context['history']]
+                    # RSI
                     delta = pd.Series(prices).diff()
                     gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
                     loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
                     rs = gain / loss
                     rsi6 = 100 - (100 / (1 + rs.iloc[-1]))
                     rsi_warning = "⚠️ 严重超买 (RSI>80)，严禁追高！" if rsi6 > 80 else "✅ 处于安全区间" if rsi6 > 20 else "💡 严重超跌 (RSI<20)，底部临近"
-                    personal_status_text += f"### 📊 情绪极值 (RSI)\n* **6日RSI指标**：{rsi6:.1f} ({rsi_warning})\n"
+                    
+                    # MACD
+                    exp1 = pd.Series(prices).ewm(span=12, adjust=False).mean()
+                    exp2 = pd.Series(prices).ewm(span=26, adjust=False).mean()
+                    macd = exp1 - exp2
+                    signal = macd.ewm(span=9, adjust=False).mean()
+                    hist = macd - signal
+                    macd_status = "🔴死叉向下空头" if hist.iloc[-1] < 0 else "🟢金叉向上多头"
+                    
+                    personal_status_text += f"### 📊 进阶动量指标 (RSI+MACD)\n* **6日RSI指标**：{rsi6:.1f} ({rsi_warning})\n* **MACD趋势动能**：{macd_status} (MACD值: {macd.iloc[-1]:.3f})\n"
             except: pass
 
             # 【4. 行业板块共振 (防错杀雷达)】
@@ -1033,7 +1005,7 @@ class GeminiAnalyzer:
                 personal_status_text += f"\n### 🌍 大盘与板块环境\n* **今日领涨板块**：{', '.join(top_up)}\n* **今日领跌板块**：{', '.join(top_down)}\n* **分析要求**：请结合板块表现判断该股今日走势是【个股独立暴雷/爆发】还是受【板块整体环境】拖累/带动？\n"
             except: pass
 
-            # 【5. AI 昨日记忆提取与打脸回测引擎(升级版)】
+            # 【5. AI 昨日记忆提取与打脸回测引擎】
             try:
                 report_files = glob.glob("reports/report_*.md")
                 report_files.sort()
@@ -1042,9 +1014,17 @@ class GeminiAnalyzer:
                         past_content = f.read()
                     stock_idx = past_content.find(f"({code})")
                     if stock_idx != -1:
-                        # 抽取上一期的关键决策进行更严厉的对标
                         personal_status_text += f"\n### 🪞 打脸回测引擎 (历史记忆对标)\n'''text\n{past_content[stock_idx:stock_idx+400]}...\n'''\n* **💥 打脸复盘最高指令**：结合今日涨跌幅为 {today.get('pct_chg', 'N/A')}%，以及当前价格 {today.get('close', 'N/A')}。请你严厉审视你上一次的“操作建议”和“支撑/压力位”。如果股价已经跌破你上次设定的支撑位，或者与你看多/看空的预测完全相反，你**必须**在《风险提示》(risk_alerts)中以“【打脸反思】：”开头，承认误判，给出反思，并重构逻辑！坚决不允许对错误视而不见或装死！\n"
             except: pass
+
+            # 【6. 涨跌停极端行情特化指令雷达】
+            pct_chg = today.get('pct_chg')
+            if pct_chg is not None and str(pct_chg).replace('.','',1).replace('-','').isdigit():
+                pct_val = float(pct_chg)
+                if pct_val > 9.5:
+                    personal_status_text += f"\n### 🚨 涨停板极端行情预警\n* 该股今日疑似涨停（+{pct_val}%）！请在作战计划中明确输出【涨停板特化战法】（如：排板介入、炸板防守），严禁给出普通的“回踩买入”等废话！\n"
+                elif pct_val < -9.5:
+                    personal_status_text += f"\n### 🚨 跌停板极端行情预警\n* 该股今日疑似跌停（{pct_val}%）！高度危险，必须在风控策略中给出“撬板逃生”或“核按钮无脑走”的特化预案！\n"
 
         except Exception as e:
             logger.error(f"六边形引擎加载失败: {e}")
@@ -1204,17 +1184,16 @@ class GeminiAnalyzer:
 如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
 
 ### 重点关注（必须明确回答）：
-1. ❓ 是否满足 MA5>MA10>MA20 多头排列？
+1. ❓ 是否满足 MA5>MA10>MA20 多头排列？MACD 是否金叉配合？
 2. ❓ 当前乖离率是否在安全范围内（<5%）？—— 超过5%必须标注"严禁追高"
-3. ❓ 量能是否配合（缩量回调/放量突破）？
+3. ❓ 遭遇涨跌停板时，防守/进攻策略是什么？
 4. ❓ 舆情与公告是否出现背离/预期差？是否存在隐蔽爆雷风险？
 5. ❓ （打脸回测）相比上一期分析，你的判断是否发生了翻车打脸？如果有，必须明确认错并复盘。
 
 ### 决策仪表盘要求：
+- **思维链推演**：必须输出多空双方以及法官的推演过程 (`debate_process`)。
 - **核心结论**：一句话说清该买/该卖/该等，若打脸请一并指出。
-- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做。
 - **具体狙击点位**：买入价、止损价、目标价（精确到分）。
-- **双引擎风险**：务必梳理出真正的利空风险点，严禁说废话。
 
 请输出完整的 JSON 格式决策仪表盘。"""
         
@@ -1329,6 +1308,7 @@ class GeminiAnalyzer:
                 data = json.loads(json_str)
                 
                 dashboard = data.get('dashboard', None)
+                debate_process = data.get('debate_process', None)
                 ai_stock_name = data.get('stock_name')
                 if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
                     name = ai_stock_name
@@ -1351,6 +1331,7 @@ class GeminiAnalyzer:
                     operation_advice=data.get('operation_advice', '持有'),
                     decision_type=decision_type,
                     confidence_level=data.get('confidence_level', '中'),
+                    debate_process=debate_process,
                     dashboard=dashboard,
                     trend_analysis=data.get('trend_analysis', ''),
                     short_term_outlook=data.get('short_term_outlook', ''),
