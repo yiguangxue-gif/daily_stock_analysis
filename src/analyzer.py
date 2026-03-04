@@ -8,6 +8,7 @@ A股自选股智能分析系统 - AI分析层
 1. 封装 Gemini API 调用逻辑
 2. 利用 Google Search Grounding 获取实时新闻
 3. 结合技术面和消息面生成分析报告
+4. 【升级】支持打脸回测与双新闻引擎（舆情+公告）交叉验证
 """
 
 import json
@@ -94,14 +95,6 @@ def get_stock_name_multi_source(
     2. 从静态映射表 STOCK_NAME_MAP 获取
     3. 从 DataFetcherManager 获取（各数据源）
     4. 返回默认名称（股票+代码）
-
-    Args:
-        stock_code: 股票代码
-        context: 分析上下文（可选）
-        data_manager: DataFetcherManager 实例（可选）
-
-    Returns:
-        股票中文名称
     """
     # 1. 从上下文获取（实时行情数据）
     if context:
@@ -145,8 +138,6 @@ def get_stock_name_multi_source(
 class AnalysisResult:
     """
     AI 分析结果数据类 - 决策仪表盘版
-
-    封装 Gemini 返回的分析结果，包含决策仪表盘和详细分析
     """
     code: str
     name: str
@@ -210,7 +201,7 @@ class AnalysisResult:
             'operation_advice': self.operation_advice,
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
-            'dashboard': self.dashboard,  # 决策仪表盘数据
+            'dashboard': self.dashboard,  
             'trend_analysis': self.trend_analysis,
             'short_term_outlook': self.short_term_outlook,
             'medium_term_outlook': self.medium_term_outlook,
@@ -282,28 +273,19 @@ class AnalysisResult:
             '强烈卖出': '❌',
         }
         advice = self.operation_advice or ''
-        # Direct match first
         if advice in emoji_map:
             return emoji_map[advice]
-        # Handle compound advice like "卖出/观望" — use the first part
         for part in advice.replace('/', '|').split('|'):
             part = part.strip()
             if part in emoji_map:
                 return emoji_map[part]
-        # Score-based fallback
         score = self.sentiment_score
-        if score >= 80:
-            return '💚'
-        elif score >= 65:
-            return '🟢'
-        elif score >= 55:
-            return '🟡'
-        elif score >= 45:
-            return '⚪'
-        elif score >= 35:
-            return '🟠'
-        else:
-            return '🔴'
+        if score >= 80: return '💚'
+        elif score >= 65: return '🟢'
+        elif score >= 55: return '🟡'
+        elif score >= 45: return '⚪'
+        elif score >= 35: return '🟠'
+        else: return '🔴'
 
     def get_confidence_stars(self) -> str:
         """返回置信度星级"""
@@ -314,23 +296,7 @@ class AnalysisResult:
 class GeminiAnalyzer:
     """
     Gemini AI 分析器
-
-    职责：
-    1. 调用 Google Gemini API 进行股票分析
-    2. 结合预先搜索的新闻和技术面数据生成分析报告
-    3. 解析 AI 返回的 JSON 格式结果
-
-    使用方式：
-        analyzer = GeminiAnalyzer()
-        result = analyzer.analyze(context, news_context)
     """
-
-    # ========================================
-    # 系统提示词 - 决策仪表盘 v2.0
-    # ========================================
-    # 输出格式升级：从简单信号升级为决策仪表盘
-    # 核心模块：核心结论 + 数据透视 + 舆情情报 + 作战计划
-    # ========================================
 
     SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析师，负责生成专业的【决策仪表盘】分析报告。
 
@@ -338,7 +304,7 @@ class GeminiAnalyzer:
 在得出最终的 JSON 结论前，你必须在内部模拟以下三个角色的激烈辩论。虽然你最终只输出 JSON，但你的分析结论必须基于这场辩论：
 1. **【死多头代理人】**：拿着放大镜找利好。找出当前盘面、均线、新闻中所有必须买入或死拿的理由，极力推销这只股票。
 2. **【大空头风控官】**：极度冷血悲观。专门挑刺，反驳死多头，无限放大所有风险（如乖离率过高、量价背离、估值过高、大盘环境差等），力劝清仓。
-3. **【首席大法官】**：结合主人的【私人持仓成本】，审视多空双方的辩论。如果主人已经严重套牢，法官要判断是该忍痛割肉还是装死；如果已经盈利，法官要判断是否会利润回撤。大法官的结论就是最终的操作建议。
+3. **【首席大法官】**：结合主人的【私人持仓成本】以及【打脸回测结果】，审视多空双方的辩论。如果主人已经严重套牢，法官要判断是该忍痛割肉还是装死；如果预测发生打脸误判，大法官必须复盘反思。大法官的结论就是最终的操作建议。
 
 ## 核心交易理念（必须严格遵守）
 
@@ -385,7 +351,7 @@ class GeminiAnalyzer:
 
 请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
 
-```json
+'''json
 {
     "stock_name": "股票中文名称",
     "sentiment_score": 0-100整数,
@@ -396,7 +362,7 @@ class GeminiAnalyzer:
 
     "dashboard": {
         "core_conclusion": {
-            "one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）",
+            "one_sentence": "一句话核心结论（30字以内，包含对打脸回测的确认，直接告诉用户做什么）",
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {
@@ -436,11 +402,12 @@ class GeminiAnalyzer:
         },
 
         "intelligence": {
-            "latest_news": "【最新消息】近期重要新闻摘要",
-            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"],
+            "latest_news": "【最新舆情】近期重要新闻摘要",
+            "announcements": "【核心公告】核心公告提炼",
+            "risk_alerts": ["风险点1：具体描述", "风险点2：具体描述", "打脸反思：如果是误判，必须在此处深刻反思"],
             "positive_catalysts": ["利好1：具体描述", "利好2：具体描述"],
             "earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）",
-            "sentiment_summary": "舆情情绪一句话总结"
+            "sentiment_summary": "双引擎(舆情与公告)情绪一句话总结"
         },
 
         "battle_plan": {
@@ -459,7 +426,7 @@ class GeminiAnalyzer:
                 "✅/⚠️/❌ 检查项1：多头排列",
                 "✅/⚠️/❌ 检查项2：乖离率合理（强势趋势可放宽）",
                 "✅/⚠️/❌ 检查项3：量能配合",
-                "✅/⚠️/❌ 检查项4：无重大利空",
+                "✅/⚠️/❌ 检查项4：公告舆情共振无雷",
                 "✅/⚠️/❌ 检查项5：筹码健康",
                 "✅/⚠️/❌ 检查项6：PE估值合理"
             ]
@@ -468,7 +435,7 @@ class GeminiAnalyzer:
 
     "analysis_summary": "100字综合分析摘要",
     "key_points": "3-5个核心看点，逗号分隔",
-    "risk_warning": "风险提示",
+    "risk_warning": "风险提示及打脸复盘",
     "buy_reason": "操作理由，引用交易理念",
 
     "trend_analysis": "走势形态分析",
@@ -481,14 +448,14 @@ class GeminiAnalyzer:
     "fundamental_analysis": "基本面分析",
     "sector_position": "板块行业分析",
     "company_highlights": "公司亮点/风险",
-    "news_summary": "新闻摘要",
+    "news_summary": "新闻与公告综合摘要",
     "market_sentiment": "市场情绪",
     "hot_topics": "相关热点",
 
     "search_performed": true/false,
     "data_sources": "数据来源说明"
 }
-```
+'''
 
 ## 评分标准
 
@@ -497,7 +464,7 @@ class GeminiAnalyzer:
 - ✅ 低乖离率：<2%，最佳买点
 - ✅ 缩量回调或放量突破
 - ✅ 筹码集中健康
-- ✅ 消息面有利好催化
+- ✅ 公告/消息面有利好催化
 
 ### 买入（60-79分）：
 - ✅ 多头排列或弱势多头
@@ -514,39 +481,34 @@ class GeminiAnalyzer:
 - ❌ 空头排列
 - ❌ 跌破MA20
 - ❌ 放量下跌
-- ❌ 重大利空
+- ❌ 重大利空（公告暴雷）
 
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
 3. **精确狙击点**：必须给出具体价格，不说模糊的话
-4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
-5. **风险优先级**：舆情中的风险点要醒目标出"""
+4. **双引擎验证**：时刻对比公司公告与市场传闻是否一致
+5. **打脸必须认错**：在 risk_alerts 中直视上次误判
+"""
 
     def __init__(self, api_key: Optional[str] = None):
         """
         初始化 AI 分析器
-
         优先级：Gemini > Anthropic > OpenAI
-
-        Args:
-            api_key: Gemini API Key（可选，默认从配置读取）
         """
         config = get_config()
         self._api_key = api_key or config.gemini_api_key
         self._model = None
-        self._current_model_name = None  # 当前使用的模型名称
-        self._using_fallback = False  # 是否正在使用备选模型
-        self._use_openai = False  # 是否使用 OpenAI 兼容 API
-        self._use_anthropic = False  # 是否使用 Anthropic Claude API
-        self._openai_client = None  # OpenAI 客户端
-        self._anthropic_client = None  # Anthropic 客户端
+        self._current_model_name = None
+        self._using_fallback = False
+        self._use_openai = False
+        self._use_anthropic = False
+        self._openai_client = None
+        self._anthropic_client = None
 
-        # 检查 Gemini API Key 是否有效（过滤占位符）
         gemini_key_valid = self._api_key and not self._api_key.startswith('your_') and len(self._api_key) > 10
 
-        # 优先级：Gemini > Anthropic > OpenAI
         if gemini_key_valid:
             try:
                 self._init_model()
@@ -561,16 +523,10 @@ class GeminiAnalyzer:
             logger.warning("No AI API Key configured, AI analysis will be unavailable")
 
     def _try_anthropic_then_openai(self) -> None:
-        """优先尝试 Anthropic，其次 OpenAI 作为备选。两者均初始化以供运行时互为故障转移（如 Anthropic 429 时切 OpenAI）。"""
         self._init_anthropic_fallback()
         self._init_openai_fallback()
 
     def _init_anthropic_fallback(self) -> None:
-        """
-        初始化 Anthropic Claude API 作为备选。
-
-        使用 Anthropic Messages API：https://docs.anthropic.com/en/api/messages
-        """
         config = get_config()
         anthropic_key_valid = (
             config.anthropic_api_key
@@ -582,50 +538,31 @@ class GeminiAnalyzer:
             return
         try:
             from anthropic import Anthropic
-
             self._anthropic_client = Anthropic(api_key=config.anthropic_api_key)
             self._current_model_name = config.anthropic_model
             self._use_anthropic = True
-            logger.info(
-                f"Anthropic Claude API init OK (model: {config.anthropic_model})"
-            )
+            logger.info(f"Anthropic Claude API init OK (model: {config.anthropic_model})")
         except ImportError:
             logger.error("anthropic package not installed, run: pip install anthropic")
         except Exception as e:
             logger.error(f"Anthropic API init failed: {e}")
 
     def _init_openai_fallback(self) -> None:
-        """
-        初始化 OpenAI 兼容 API 作为备选
-
-        支持所有 OpenAI 格式的 API，包括：
-        - OpenAI 官方
-        - DeepSeek
-        - 通义千问
-        - Moonshot 等
-        """
         config = get_config()
-
-        # 检查 OpenAI API Key 是否有效（过滤占位符）
         openai_key_valid = (
             config.openai_api_key and
             not config.openai_api_key.startswith('your_') and
             len(config.openai_api_key) > 10
         )
-
         if not openai_key_valid:
             logger.debug("OpenAI 兼容 API 未配置或配置无效")
             return
-
-        # 分离 import 和客户端创建，以便提供更准确的错误信息
         try:
             from openai import OpenAI
         except ImportError:
             logger.error("未安装 openai 库，请运行: pip install openai")
             return
-
         try:
-            # base_url 可选，不填则使用 OpenAI 官方默认地址
             client_kwargs = {"api_key": config.openai_api_key}
             if config.openai_base_url and config.openai_base_url.startswith('http'):
                 client_kwargs["base_url"] = config.openai_base_url
@@ -637,7 +574,6 @@ class GeminiAnalyzer:
             self._use_openai = True
             logger.info(f"OpenAI 兼容 API 初始化成功 (base_url: {config.openai_base_url}, model: {config.openai_model})")
         except ImportError as e:
-            # 依赖缺失（如 socksio）
             if 'socksio' in str(e).lower() or 'socks' in str(e).lower():
                 logger.error(f"OpenAI 客户端需要 SOCKS 代理支持，请运行: pip install httpx[socks] 或 pip install socksio")
             else:
@@ -650,28 +586,13 @@ class GeminiAnalyzer:
                 logger.error(f"OpenAI 兼容 API 初始化失败: {e}")
 
     def _init_model(self) -> None:
-        """
-        初始化 Gemini 模型
-
-        配置：
-        - 使用 gemini-3-flash-preview 或 gemini-2.5-flash 模型
-        - 不启用 Google Search（使用外部 Tavily/SerpAPI 搜索）
-        """
         try:
             import google.generativeai as genai
-
-            # 配置 API Key
             genai.configure(api_key=self._api_key)
-
-            # 从配置获取模型名称
             config = get_config()
             model_name = config.gemini_model
             fallback_model = config.gemini_model_fallback
 
-            # 不再使用 Google Search Grounding（已知有兼容性问题）
-            # 改为使用外部搜索服务（Tavily/SerpAPI）预先获取新闻
-
-            # 尝试初始化主模型
             try:
                 self._model = genai.GenerativeModel(
                     model_name=model_name,
@@ -681,7 +602,6 @@ class GeminiAnalyzer:
                 self._using_fallback = False
                 logger.info(f"Gemini 模型初始化成功 (模型: {model_name})")
             except Exception as model_error:
-                # 尝试备选模型
                 logger.warning(f"主模型 {model_name} 初始化失败: {model_error}，尝试备选模型 {fallback_model}")
                 self._model = genai.GenerativeModel(
                     model_name=fallback_model,
@@ -696,17 +616,10 @@ class GeminiAnalyzer:
             self._model = None
 
     def _switch_to_fallback_model(self) -> bool:
-        """
-        切换到备选模型
-
-        Returns:
-            是否成功切换
-        """
         try:
             import google.generativeai as genai
             config = get_config()
             fallback_model = config.gemini_model_fallback
-
             logger.warning(f"[LLM] 切换到备选模型: {fallback_model}")
             self._model = genai.GenerativeModel(
                 model_name=fallback_model,
@@ -721,7 +634,6 @@ class GeminiAnalyzer:
             return False
 
     def is_available(self) -> bool:
-        """检查分析器是否可用。"""
         return (
             self._model is not None
             or self._anthropic_client is not None
@@ -729,22 +641,10 @@ class GeminiAnalyzer:
         )
 
     def _call_anthropic_api(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 Anthropic Claude Messages API。
-
-        Args:
-            prompt: 用户提示词
-            generation_config: 生成配置（temperature, max_output_tokens）
-
-        Returns:
-            响应文本
-        """
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
-        temperature = generation_config.get(
-            'temperature', config.anthropic_temperature
-        )
+        temperature = generation_config.get('temperature', config.anthropic_temperature)
         max_tokens = generation_config.get('max_output_tokens', config.anthropic_max_tokens)
 
         for attempt in range(max_retries):
@@ -752,10 +652,7 @@ class GeminiAnalyzer:
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1))
                     delay = min(delay, 60)
-                    logger.info(
-                        f"[Anthropic] Retry {attempt + 1}/{max_retries}, "
-                        f"waiting {delay:.1f}s..."
-                    )
+                    logger.info(f"[Anthropic] Retry {attempt + 1}/{max_retries}, waiting {delay:.1f}s...")
                     time.sleep(delay)
 
                 message = self._anthropic_client.messages.create(
@@ -765,51 +662,26 @@ class GeminiAnalyzer:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=temperature,
                 )
-                if (
-                    message.content
-                    and len(message.content) > 0
-                    and hasattr(message.content[0], 'text')
-                ):
+                if message.content and len(message.content) > 0 and hasattr(message.content[0], 'text'):
                     return message.content[0].text
                 raise ValueError("Anthropic API returned empty response")
             except Exception as e:
                 error_str = str(e)
-                is_rate_limit = (
-                    '429' in error_str
-                    or 'rate' in error_str.lower()
-                    or 'quota' in error_str.lower()
-                )
+                is_rate_limit = ('429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower())
                 if is_rate_limit:
-                    logger.warning(
-                        f"[Anthropic] Rate limit, attempt {attempt + 1}/"
-                        f"{max_retries}: {error_str[:100]}"
-                    )
+                    logger.warning(f"[Anthropic] Rate limit, attempt {attempt + 1}/{max_retries}: {error_str[:100]}")
                 else:
-                    logger.warning(
-                        f"[Anthropic] API failed, attempt {attempt + 1}/"
-                        f"{max_retries}: {error_str[:100]}"
-                    )
+                    logger.warning(f"[Anthropic] API failed, attempt {attempt + 1}/{max_retries}: {error_str[:100]}")
                 if attempt == max_retries - 1:
                     raise
         raise Exception("Anthropic API failed after max retries")
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 OpenAI 兼容 API
-
-        Args:
-            prompt: 提示词
-            generation_config: 生成配置
-
-        Returns:
-            响应文本
-        """
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
 
         def _build_base_request_kwargs() -> dict:
-            # OpenAI-compatible path (DeepSeek, Qwen, etc.): add extra_body for thinking models
             model_name = self._current_model_name
             kwargs = {
                 "model": model_name,
@@ -884,36 +756,15 @@ class GeminiAnalyzer:
         raise Exception("OpenAI API 调用失败，已达最大重试次数")
     
     def _call_api_with_retry(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 AI API，带有重试和模型切换机制
-        
-        优先级：Gemini > Gemini 备选模型 > OpenAI 兼容 API
-        
-        处理 429 限流错误：
-        1. 先指数退避重试
-        2. 多次失败后切换到备选模型
-        3. Gemini 完全失败后尝试 OpenAI
-        
-        Args:
-            prompt: 提示词
-            generation_config: 生成配置
-            
-        Returns:
-            响应文本
-        """
-        # 若使用 Anthropic，调用 Anthropic（失败时回退到 OpenAI）
         if self._use_anthropic:
             try:
                 return self._call_anthropic_api(prompt, generation_config)
             except Exception as anthropic_error:
                 if self._openai_client:
-                    logger.warning(
-                        "[Anthropic] All retries failed, falling back to OpenAI"
-                    )
+                    logger.warning("[Anthropic] All retries failed, falling back to OpenAI")
                     return self._call_openai_api(prompt, generation_config)
                 raise anthropic_error
 
-        # 若使用 OpenAI（仅当无 Anthropic 时为主选）
         if self._use_openai:
             return self._call_openai_api(prompt, generation_config)
 
@@ -926,10 +777,9 @@ class GeminiAnalyzer:
         
         for attempt in range(max_retries):
             try:
-                # 请求前增加延时（防止请求过快触发限流）
                 if attempt > 0:
-                    delay = base_delay * (2 ** (attempt - 1))  # 指数退避: 5, 10, 20, 40...
-                    delay = min(delay, 60)  # 最大60秒
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay = min(delay, 60)
                     logger.info(f"[Gemini] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
                     time.sleep(delay)
                 
@@ -948,13 +798,10 @@ class GeminiAnalyzer:
                 last_error = e
                 error_str = str(e)
                 
-                # 检查是否是 429 限流错误
                 is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
                 
                 if is_rate_limit:
                     logger.warning(f"[Gemini] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-                    
-                    # 如果已经重试了一半次数且还没切换过备选模型，尝试切换
                     if attempt >= max_retries // 2 and not tried_fallback:
                         if self._switch_to_fallback_model():
                             tried_fallback = True
@@ -962,26 +809,20 @@ class GeminiAnalyzer:
                         else:
                             logger.warning("[Gemini] 切换备选模型失败，继续使用当前模型重试")
                 else:
-                    # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
-        # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
         if self._anthropic_client:
             logger.warning("[Gemini] All retries failed, switching to Anthropic")
             try:
                 return self._call_anthropic_api(prompt, generation_config)
             except Exception as anthropic_error:
-                logger.warning(
-                    f"[Anthropic] Fallback failed: {anthropic_error}"
-                )
+                logger.warning(f"[Anthropic] Fallback failed: {anthropic_error}")
                 if self._openai_client:
                     logger.warning("[Gemini] Trying OpenAI as final fallback")
                     try:
                         return self._call_openai_api(prompt, generation_config)
                     except Exception as openai_error:
-                        logger.error(
-                            f"[OpenAI] Final fallback also failed: {openai_error}"
-                        )
+                        logger.error(f"[OpenAI] Final fallback also failed: {openai_error}")
                         raise last_error or anthropic_error or openai_error
                 raise last_error or anthropic_error
 
@@ -992,7 +833,7 @@ class GeminiAnalyzer:
             except Exception as openai_error:
                 logger.error(f"[OpenAI] Fallback also failed: {openai_error}")
                 raise last_error or openai_error
-        # 懒加载 Anthropic，再尝试 OpenAI
+
         if config.anthropic_api_key and not self._anthropic_client:
             logger.warning("[Gemini] Trying lazy-init Anthropic API")
             self._init_anthropic_fallback()
@@ -1017,50 +858,32 @@ class GeminiAnalyzer:
                     logger.error(f"[OpenAI] Lazy fallback also failed: {openai_error}")
                     raise last_error or openai_error
 
-        # 所有备选均耗尽
         raise last_error or Exception("所有 AI API 调用失败，已达最大重试次数")
     
     def analyze(
         self, 
         context: Dict[str, Any],
-        news_context: Optional[str] = None
+        news_context: Optional[str] = None,
+        announcement_context: Optional[str] = None
     ) -> AnalysisResult:
         """
         分析单只股票
-        
-        流程：
-        1. 格式化输入数据（技术面 + 新闻）
-        2. 调用 Gemini API（带重试和模型切换）
-        3. 解析 JSON 响应
-        4. 返回结构化结果
-        
-        Args:
-            context: 从 storage.get_analysis_context() 获取的上下文数据
-            news_context: 预先搜索的新闻内容（可选）
-            
-        Returns:
-            AnalysisResult 对象
         """
         code = context.get('code', 'Unknown')
         config = get_config()
         
-        # 请求前增加延时（防止连续请求触发限流）
         request_delay = config.gemini_request_delay
         if request_delay > 0:
             logger.debug(f"[LLM] 请求前等待 {request_delay:.1f} 秒...")
             time.sleep(request_delay)
         
-        # 优先从上下文获取股票名称（由 main.py 传入）
         name = context.get('stock_name')
         if not name or name.startswith('股票'):
-            # 备选：从 realtime 中获取
             if 'realtime' in context and context['realtime'].get('name'):
                 name = context['realtime']['name']
             else:
-                # 最后从映射表获取
                 name = STOCK_NAME_MAP.get(code, f'股票{code}')
         
-        # 如果模型不可用，返回默认结果
         if not self.is_available():
             return AnalysisResult(
                 code=code,
@@ -1076,10 +899,9 @@ class GeminiAnalyzer:
             )
         
         try:
-            # 格式化输入（包含技术面数据和新闻）
-            prompt = self._format_prompt(context, name, news_context)
+            # 格式化输入（包含技术面数据、双新闻引擎、打脸回测）
+            prompt = self._format_prompt(context, name, news_context, announcement_context)
             
-            # 获取模型名称
             model_name = getattr(self, '_current_model_name', None)
             if not model_name:
                 model_name = getattr(self._model, '_model_name', 'unknown')
@@ -1089,21 +911,17 @@ class GeminiAnalyzer:
             logger.info(f"========== AI 分析 {name}({code}) ==========")
             logger.info(f"[LLM配置] 模型: {model_name}")
             logger.info(f"[LLM配置] Prompt 长度: {len(prompt)} 字符")
-            logger.info(f"[LLM配置] 是否包含新闻: {'是' if news_context else '否'}")
+            logger.info(f"[LLM配置] 是否包含双新闻引擎: {'是' if news_context or announcement_context else '否'}")
             
-            # 记录完整 prompt 到日志（INFO级别记录摘要，DEBUG记录完整）
             prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
             logger.info(f"[LLM Prompt 预览]\n{prompt_preview}")
             logger.debug(f"=== 完整 Prompt ({len(prompt)}字符) ===\n{prompt}\n=== End Prompt ===")
 
-            # 设置生成配置（从配置文件读取温度参数）
-            config = get_config()
             generation_config = {
                 "temperature": config.gemini_temperature,
                 "max_output_tokens": 8192,
             }
 
-            # 记录实际使用的 API 提供方
             api_provider = (
                 "OpenAI" if self._use_openai
                 else "Anthropic" if self._use_anthropic
@@ -1111,23 +929,19 @@ class GeminiAnalyzer:
             )
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
             
-            # 使用带重试的 API 调用
             start_time = time.time()
             response_text = self._call_api_with_retry(prompt, generation_config)
             elapsed = time.time() - start_time
 
-            # 记录响应信息
             logger.info(f"[LLM返回] {api_provider} API 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
             
-            # 记录响应预览（INFO级别）和完整响应（DEBUG级别）
             response_preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
             logger.info(f"[LLM返回 预览]\n{response_preview}")
             logger.debug(f"=== {api_provider} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ===")
             
-            # 解析响应
             result = self._parse_response(response_text, code, name)
             result.raw_response = response_text
-            result.search_performed = bool(news_context)
+            result.search_performed = bool(news_context or announcement_context)
             result.market_snapshot = self._build_market_snapshot(context)
 
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
@@ -1153,34 +967,24 @@ class GeminiAnalyzer:
         self, 
         context: Dict[str, Any], 
         name: str,
-        news_context: Optional[str] = None
+        news_context: Optional[str] = None,
+        announcement_context: Optional[str] = None
     ) -> str:
-        """
-        格式化分析提示词（决策仪表盘 v2.0）
-        
-        包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
-        
-        Args:
-            context: 技术面数据上下文（包含增强数据）
-            name: 股票名称（默认值，可能被上下文覆盖）
-            news_context: 预先搜索的新闻内容
-        """
         code = context.get('code', 'Unknown')
-        # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
             stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
             
         today = context.get('today', {})
         
-# ========== [微创手术开始] 云端仓位+AI记忆+主力资金+RSI+板块共振 六边形引擎 ==========
+        # ========== [微创手术开始] 云端仓位+打脸回测+主力资金+RSI+板块共振 六边形引擎 ==========
         personal_status_text = ""
         try:
             import os, urllib.request, csv, io, glob
             import akshare as ak
             import pandas as pd
             
-            # 【1. 云端仓位与盈亏计算 - 冷血大法官升级版】
+            # 【1. 云端仓位与盈亏计算】
             csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
             my_cost, my_shares = None, None
             curr_price = today.get('close')
@@ -1229,7 +1033,7 @@ class GeminiAnalyzer:
                 personal_status_text += f"\n### 🌍 大盘与板块环境\n* **今日领涨板块**：{', '.join(top_up)}\n* **今日领跌板块**：{', '.join(top_down)}\n* **分析要求**：请结合板块表现判断该股今日走势是【个股独立暴雷/爆发】还是受【板块整体环境】拖累/带动？\n"
             except: pass
 
-            # 【5. AI 昨日记忆提取】
+            # 【5. AI 昨日记忆提取与打脸回测引擎(升级版)】
             try:
                 report_files = glob.glob("reports/report_*.md")
                 report_files.sort()
@@ -1238,12 +1042,14 @@ class GeminiAnalyzer:
                         past_content = f.read()
                     stock_idx = past_content.find(f"({code})")
                     if stock_idx != -1:
-                        personal_status_text += f"\n### 🧠 上次分析回顾\n```text\n{past_content[stock_idx:stock_idx+350]}...\n```\n* **打脸与反思指令**：今日涨跌幅为{today.get('pct_chg')}。请对比你上次的结论，若走势完全相反，必须在风险警报中【深刻复盘反思原因】，保持策略的连贯性，追踪原先设定的支撑/压力位。\n"
+                        # 抽取上一期的关键决策进行更严厉的对标
+                        personal_status_text += f"\n### 🪞 打脸回测引擎 (历史记忆对标)\n'''text\n{past_content[stock_idx:stock_idx+400]}...\n'''\n* **💥 打脸复盘最高指令**：结合今日涨跌幅为 {today.get('pct_chg', 'N/A')}%，以及当前价格 {today.get('close', 'N/A')}。请你严厉审视你上一次的“操作建议”和“支撑/压力位”。如果股价已经跌破你上次设定的支撑位，或者与你看多/看空的预测完全相反，你**必须**在《风险提示》(risk_alerts)中以“【打脸反思】：”开头，承认误判，给出反思，并重构逻辑！坚决不允许对错误视而不见或装死！\n"
             except: pass
 
         except Exception as e:
             logger.error(f"六边形引擎加载失败: {e}")
         # ========== [微创手术结束] ==========
+        
         prompt = f"""# 决策仪表盘分析请求
 {personal_status_text} 
 
@@ -1278,7 +1084,6 @@ class GeminiAnalyzer:
 | 均线形态 | {context.get('ma_status', '未知')} | 多头/空头/缠绕 |
 """
         
-        # 添加实时行情数据（量比、换手率等）
         if 'realtime' in context:
             rt = context['realtime']
             prompt += f"""
@@ -1295,7 +1100,6 @@ class GeminiAnalyzer:
 | 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
 """
         
-        # 添加筹码分布数据
         if 'chip' in context:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
@@ -1310,7 +1114,6 @@ class GeminiAnalyzer:
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
 """
         
-        # 添加趋势分析结果（基于交易理念的预判）
         if 'trend_analysis' in context:
             trend = context['trend_analysis']
             bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
@@ -1335,7 +1138,6 @@ class GeminiAnalyzer:
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
         
-        # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
             prompt += f"""
@@ -1344,29 +1146,35 @@ class GeminiAnalyzer:
 - 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
 """
         
-        # 添加新闻搜索结果（重点区域）
+        # 【全新双新闻引擎注入】
         prompt += """
 ---
 
-## 📰 舆情情报
+## 📰 双引擎舆情情报 (交叉验证)
 """
-        if news_context:
-            prompt += f"""
-以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
-1. 🚨 **风险警报**：减持、处罚、利空
-2. 🎯 **利好催化**：业绩、合同、政策
-3. 📊 **业绩预期**：年报预告、业绩快报
-
-```
+        if news_context or announcement_context:
+            prompt += f"以下是 **{stock_name}({code})** 近期的双源情报。请注意对比**公司官方发声**与**坊间传闻**是否有预期差：\n"
+            
+            if news_context:
+                prompt += f"""
+### 🔍 引擎一：全网舆情与市场情绪 (媒体/股吧等)
+'''text
 {news_context}
-```
+'''
 """
+            if announcement_context:
+                prompt += f"""
+### 📢 引擎二：公司核心公告 (交易所官方披露)
+'''text
+{announcement_context}
+'''
+"""
+            prompt += "\n**【双引擎交叉分析指令】**：请在输出的 `intelligence` 中综合总结情绪。如果坊间传闻满天飞但迟迟不见公告，或者公告澄清了绯闻，请在风险点中重点提示“炒作降温风险”！重点排查公告中是否隐藏了减持、立案、业绩暴雷的雷点！\n"
         else:
             prompt += """
-未搜索到该股票近期的相关新闻。请主要依据技术面数据进行分析。
+未搜索到该股票近期的相关新闻或公告。请主要依据技术面数据进行分析。
 """
 
-        # 注入缺失数据警告
         if context.get('data_missing'):
             prompt += """
 ⚠️ **数据缺失警告**
@@ -1375,7 +1183,6 @@ class GeminiAnalyzer:
 在回答技术面问题（如均线、乖离率）时，请直接说明“数据缺失，无法判断”，**严禁编造数据**。
 """
 
-        # 明确的输出要求
         prompt += f"""
 ---
 
@@ -1400,22 +1207,20 @@ class GeminiAnalyzer:
 1. ❓ 是否满足 MA5>MA10>MA20 多头排列？
 2. ❓ 当前乖离率是否在安全范围内（<5%）？—— 超过5%必须标注"严禁追高"
 3. ❓ 量能是否配合（缩量回调/放量突破）？
-4. ❓ 筹码结构是否健康？
-5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+4. ❓ 舆情与公告是否出现背离/预期差？是否存在隐蔽爆雷风险？
+5. ❓ （打脸回测）相比上一期分析，你的判断是否发生了翻车打脸？如果有，必须明确认错并复盘。
 
 ### 决策仪表盘要求：
-- **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
-- **核心结论**：一句话说清该买/该卖/该等
-- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
-- **具体狙击点位**：买入价、止损价、目标价（精确到分）
-- **检查清单**：每项用 ✅/⚠️/❌ 标记
+- **核心结论**：一句话说清该买/该卖/该等，若打脸请一并指出。
+- **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做。
+- **具体狙击点位**：买入价、止损价、目标价（精确到分）。
+- **双引擎风险**：务必梳理出真正的利空风险点，严禁说废话。
 
 请输出完整的 JSON 格式决策仪表盘。"""
         
         return prompt
-    
+
     def _format_volume(self, volume: Optional[float]) -> str:
-        """格式化成交量显示"""
         if volume is None:
             return 'N/A'
         if volume >= 1e8:
@@ -1424,9 +1229,8 @@ class GeminiAnalyzer:
             return f"{volume / 1e4:.2f} 万股"
         else:
             return f"{volume:.0f} 股"
-    
+
     def _format_amount(self, amount: Optional[float]) -> str:
-        """格式化成交额显示"""
         if amount is None:
             return 'N/A'
         if amount >= 1e8:
@@ -1437,7 +1241,6 @@ class GeminiAnalyzer:
             return f"{amount:.0f} 元"
 
     def _format_percent(self, value: Optional[float]) -> str:
-        """格式化百分比显示"""
         if value is None:
             return 'N/A'
         try:
@@ -1446,7 +1249,6 @@ class GeminiAnalyzer:
             return 'N/A'
 
     def _format_price(self, value: Optional[float]) -> str:
-        """格式化价格显示"""
         if value is None:
             return 'N/A'
         try:
@@ -1455,7 +1257,6 @@ class GeminiAnalyzer:
             return 'N/A'
 
     def _build_market_snapshot(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """构建当日行情快照（展示用）"""
         today = context.get('today', {}) or {}
         realtime = context.get('realtime', {}) or {}
         yesterday = context.get('yesterday', {}) or {}
@@ -1508,42 +1309,30 @@ class GeminiAnalyzer:
         code: str, 
         name: str
     ) -> AnalysisResult:
-        """
-        解析 Gemini 响应（决策仪表盘版）
-        
-        尝试从响应中提取 JSON 格式的分析结果，包含 dashboard 字段
-        如果解析失败，尝试智能提取或返回默认结果
-        """
         try:
-            # 清理响应文本：移除 markdown 代码块标记
             cleaned_text = response_text
-            if '```json' in cleaned_text:
-                cleaned_text = cleaned_text.replace('```json', '').replace('```', '')
-            elif '```' in cleaned_text:
-                cleaned_text = cleaned_text.replace('```', '')
             
-            # 尝试找到 JSON 内容
+            # 动态生成包裹符号避免渲染器解析错误
+            bg = "`" * 3
+            
+            if f'{bg}json' in cleaned_text:
+                cleaned_text = cleaned_text.replace(f'{bg}json', '').replace(bg, '')
+            elif bg in cleaned_text:
+                cleaned_text = cleaned_text.replace(bg, '')
+            
             json_start = cleaned_text.find('{')
             json_end = cleaned_text.rfind('}') + 1
             
             if json_start >= 0 and json_end > json_start:
                 json_str = cleaned_text[json_start:json_end]
-                
-                # 尝试修复常见的 JSON 问题
                 json_str = self._fix_json_string(json_str)
-                
                 data = json.loads(json_str)
                 
-                # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
-
-                # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
                 ai_stock_name = data.get('stock_name')
                 if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
                     name = ai_stock_name
 
-                # 解析所有字段，使用默认值防止缺失
-                # 解析 decision_type，如果没有则根据 operation_advice 推断
                 decision_type = data.get('decision_type', '')
                 if not decision_type:
                     op = data.get('operation_advice', '持有')
@@ -1557,85 +1346,63 @@ class GeminiAnalyzer:
                 return AnalysisResult(
                     code=code,
                     name=name,
-                    # 核心指标
                     sentiment_score=int(data.get('sentiment_score', 50)),
                     trend_prediction=data.get('trend_prediction', '震荡'),
                     operation_advice=data.get('operation_advice', '持有'),
                     decision_type=decision_type,
                     confidence_level=data.get('confidence_level', '中'),
-                    # 决策仪表盘
                     dashboard=dashboard,
-                    # 走势分析
                     trend_analysis=data.get('trend_analysis', ''),
                     short_term_outlook=data.get('short_term_outlook', ''),
                     medium_term_outlook=data.get('medium_term_outlook', ''),
-                    # 技术面
                     technical_analysis=data.get('technical_analysis', ''),
                     ma_analysis=data.get('ma_analysis', ''),
                     volume_analysis=data.get('volume_analysis', ''),
                     pattern_analysis=data.get('pattern_analysis', ''),
-                    # 基本面
                     fundamental_analysis=data.get('fundamental_analysis', ''),
                     sector_position=data.get('sector_position', ''),
                     company_highlights=data.get('company_highlights', ''),
-                    # 情绪面/消息面
                     news_summary=data.get('news_summary', ''),
                     market_sentiment=data.get('market_sentiment', ''),
                     hot_topics=data.get('hot_topics', ''),
-                    # 综合
                     analysis_summary=data.get('analysis_summary', '分析完成'),
                     key_points=data.get('key_points', ''),
                     risk_warning=data.get('risk_warning', ''),
                     buy_reason=data.get('buy_reason', ''),
-                    # 元数据
                     search_performed=data.get('search_performed', False),
                     data_sources=data.get('data_sources', '技术面数据'),
                     success=True,
                 )
             else:
-                # 没有找到 JSON，尝试从纯文本中提取信息
                 logger.warning(f"无法从响应中提取 JSON，使用原始文本分析")
                 return self._parse_text_response(response_text, code, name)
                 
         except json.JSONDecodeError as e:
             logger.warning(f"JSON 解析失败: {e}，尝试从文本提取")
             return self._parse_text_response(response_text, code, name)
-    
+
     def _fix_json_string(self, json_str: str) -> str:
-        """修复常见的 JSON 格式问题"""
         import re
-        
-        # 移除注释
         json_str = re.sub(r'//.*?\n', '\n', json_str)
         json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
-        
-        # 修复尾随逗号
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
-        
-        # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
-        
-        # fix by json-repair
         json_str = repair_json(json_str)
-        
         return json_str
-    
+
     def _parse_text_response(
         self, 
         response_text: str, 
         code: str, 
         name: str
     ) -> AnalysisResult:
-        """从纯文本响应中尽可能提取分析信息"""
-        # 尝试识别关键词来判断情绪
         sentiment_score = 50
         trend = '震荡'
         advice = '持有'
         
         text_lower = response_text.lower()
         
-        # 简单的情绪识别
         positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
         negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
         
@@ -1655,7 +1422,6 @@ class GeminiAnalyzer:
         else:
             decision_type = 'hold'
         
-        # 截取前500字符作为摘要
         summary = response_text[:500] if response_text else '无分析结果'
         
         return AnalysisResult(
@@ -1672,23 +1438,16 @@ class GeminiAnalyzer:
             raw_response=response_text,
             success=True,
         )
-    
+
     def batch_analyze(
         self, 
         contexts: List[Dict[str, Any]],
+        news_contexts: Optional[List[Optional[str]]] = None,
+        announcement_contexts: Optional[List[Optional[str]]] = None,
         delay_between: float = 2.0
     ) -> List[AnalysisResult]:
         """
-        批量分析多只股票
-        
-        注意：为避免 API 速率限制，每次分析之间会有延迟
-        
-        Args:
-            contexts: 上下文数据列表
-            delay_between: 每次分析之间的延迟（秒）
-            
-        Returns:
-            AnalysisResult 列表
+        批量分析多只股票，现已支持传入双新闻引擎参数。
         """
         results = []
         
@@ -1697,7 +1456,11 @@ class GeminiAnalyzer:
                 logger.debug(f"等待 {delay_between} 秒后继续...")
                 time.sleep(delay_between)
             
-            result = self.analyze(context)
+            # 安全地提取对应的双引擎数据
+            nc = news_contexts[i] if news_contexts and i < len(news_contexts) else None
+            ac = announcement_contexts[i] if announcement_contexts and i < len(announcement_contexts) else None
+            
+            result = self.analyze(context, news_context=nc, announcement_context=ac)
             results.append(result)
         
         return results
@@ -1713,7 +1476,6 @@ if __name__ == "__main__":
     # 测试代码
     logging.basicConfig(level=logging.DEBUG)
     
-    # 模拟上下文数据
     test_context = {
         'code': '600519',
         'date': '2026-01-09',
@@ -1739,7 +1501,15 @@ if __name__ == "__main__":
     
     if analyzer.is_available():
         print("=== AI 分析测试 ===")
-        result = analyzer.analyze(test_context)
+        # 演示如何调用含有双新闻引擎参数的测试
+        mock_news = "市场传言贵州茅台近期将推出新品，引发资金抢筹。"
+        mock_announce = "贵州茅台发布公告：未接到涨价或新品发布的计划，提醒投资者注意风险。"
+        
+        result = analyzer.analyze(
+            context=test_context, 
+            news_context=mock_news, 
+            announcement_context=mock_announce
+        )
         print(f"分析结果: {result.to_dict()}")
     else:
         print("Gemini API 未配置，跳过测试")
