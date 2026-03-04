@@ -647,7 +647,8 @@ class GeminiAnalyzer:
             return self._call_openai_api(prompt, generation_config)
 
         config = get_config()
-        max_retries = config.gemini_max_retries
+        # 强制至少重试 5 次，应对极端的速率限制
+        max_retries = max(config.gemini_max_retries, 5)
         base_delay = config.gemini_retry_delay
         
         last_error = None
@@ -655,10 +656,6 @@ class GeminiAnalyzer:
         
         for attempt in range(max_retries):
             try:
-                if attempt > 0:
-                    delay = min(base_delay * (2 ** (attempt - 1)), 60)
-                    time.sleep(delay)
-                
                 response = self._model.generate_content(
                     prompt,
                     generation_config=generation_config,
@@ -676,9 +673,27 @@ class GeminiAnalyzer:
                 is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
                 
                 if is_rate_limit:
+                    logger.warning(f"[Gemini] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:150]}")
+                    
+                    # 【核心修复】动态读取 Google 报错里要求等待的秒数 (例如: retry in 30.38s)
+                    import re
+                    match = re.search(r'retry in (\d+\.?\d*)s', error_str)
+                    if match:
+                        delay = float(match.group(1)) + 2.0  # 提取具体时间再+2秒缓冲
+                    else:
+                        delay = min(base_delay * (2 ** attempt), 60)
+                        
                     if attempt >= max_retries // 2 and not tried_fallback:
                         if self._switch_to_fallback_model():
                             tried_fallback = True
+                            delay = 2  # 切换备用模型后直接试
+                            
+                    logger.info(f"[Gemini] 触发限流，强制休眠等待恢复 {delay:.2f} 秒...")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
+                    delay = min(base_delay * (2 ** attempt), 30)
+                    time.sleep(delay)
         
         if self._anthropic_client:
             try:
@@ -769,27 +784,15 @@ class GeminiAnalyzer:
             
         except Exception as e:
             logger.error(f"AI 分析 {name}({code}) 失败: {e}")
+            # 【核心修复】即使API彻底崩溃，也要保留用户的成本数据，并提示明确的错误
             return AnalysisResult(
-                code=code, name=name, sentiment_score=50, trend_prediction='震荡', operation_advice='持有',
-                analysis_summary=f'出错: {str(e)[:100]}', success=False, error_message=str(e)
+                code=code, name=name, sentiment_score=50, trend_prediction='未知(API报错)', operation_advice='观望',
+                analysis_summary=f'系统提示: API 额度耗尽或发生网络异常，导致分析生成失败。异常信息: {str(e)[:100]}', 
+                success=False, error_message=str(e),
+                user_cost=context.get('user_cost'), user_shares=context.get('user_shares')
             )
     
-    def _format_prompt(
-        self, 
-        context: Dict[str, Any], 
-        name: str,
-        news_context: Optional[str] = None,
-        announcement_context: Optional[str] = None
-    ) -> str:
-        code = context.get('code', 'Unknown')
-        stock_name = context.get('stock_name', name)
-        if not stock_name or stock_name == f'股票{code}':
-            stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
-            
-        today = context.get('today', {})
-        
-        # ========== [微创手术开始] 八边形全天候雷达 ==========
-        personal_status_text = ""
+    def _safe_float(self, val: Any) -> Optional[float]:
         try:
             import os, urllib.request, csv, io, glob
             import akshare as ak
