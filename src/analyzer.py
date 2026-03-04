@@ -1173,4 +1173,3 @@ results.append(self.analyze(context, news_context=nc, announcement_context=ac))
 return results
 def get_analyzer() -> GeminiAnalyzer:
 return GeminiAnalyzer()
-
