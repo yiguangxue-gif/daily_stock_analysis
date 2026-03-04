@@ -176,9 +176,11 @@ class AnalysisResult:
     success: bool = True
     error_message: Optional[str] = None
 
-    # ========== 价格数据 ==========
+    # ========== 价格与持仓数据 ==========
     current_price: Optional[float] = None
     change_pct: Optional[float] = None
+    user_cost: Optional[float] = None  # 新增：直接保存用户成本
+    user_shares: Optional[int] = None  # 新增：直接保存用户持仓数
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -214,6 +216,8 @@ class AnalysisResult:
             'error_message': self.error_message,
             'current_price': self.current_price,
             'change_pct': self.change_pct,
+            'user_cost': self.user_cost,
+            'user_shares': self.user_shares,
         }
 
     def get_core_conclusion(self) -> str:
@@ -293,7 +297,7 @@ class GeminiAnalyzer:
 
 ### 3. 追踪止损与仓位管理 (Trailing Stop & Kelly)
 - 仓位必须精确到百分比（如 25%、60%）。
-- 必须提供“动态追踪防守位”（如有效跌破 MA10 或前低无条件清仓）。
+- **如果技术面数据(如均线)为 N/A，必须根据当前价和支撑位直接计算止损价格，绝对禁止输出 N/A！**
 
 ### 4. 极端行情特化指令（涨跌停战法）
 - **若触发涨停板（+9.5%以上）**：放弃常规支撑压力分析。明确指出是“排板锁仓”还是“炸板止盈”。
@@ -366,7 +370,7 @@ class GeminiAnalyzer:
             "sniper_points": {
                 "ideal_buy": "理想买入点：XX元",
                 "secondary_buy": "次优买入点：XX元",
-                "trailing_stop": "动态追踪防守位：XX元（跌破则无条件离场）",
+                "trailing_stop": "动态追踪防守位：XX元（严禁填N/A，即使缺失数据也要估算一个防守位）",
                 "take_profit": "目标位：XX元"
             },
             "grid_trading_plan": {
@@ -376,6 +380,7 @@ class GeminiAnalyzer:
                 "sell_grid": "每反弹XX元卖出X股/成"
             },
             "position_strategy": {
+                "personal_cost_review": "用户当前成本XX元，盈亏XX%。(若系统未提供成本数据请填无)",
                 "quant_position_sizing": "量化建议仓位：XX%",
                 "entry_plan": "建仓/逃生策略",
                 "risk_control": "风控策略"
@@ -416,7 +421,7 @@ class GeminiAnalyzer:
 ## 决策仪表盘最高原则
 1. **显式思维链先行**：必须在 `debate_process` 中完成多空与宏观微观的推演。
 2. **量化与网格**：仓位必须输出百分比(%)。震荡期必须依靠 ATR 输出 T+0 网格间距 (`grid_trading_plan`)。
-3. **大小级别定生死**：永远将周线级别(大级别)趋势放在判断的第一位。
+3. **禁止N/A偷懒**：如果支撑压力等数据缺失，必须通过当前收盘价向下按百分比强行推算止损位！绝对禁止输出 N/A。
 """
 
     def __init__(self, api_key: Optional[str] = None):
@@ -755,6 +760,10 @@ class GeminiAnalyzer:
             result.raw_response = response_text
             result.search_performed = bool(news_context or announcement_context)
             result.market_snapshot = self._build_market_snapshot(context)
+
+            # 把从外部获取的持仓数据也同步存入 Result 中
+            result.user_cost = context.get('user_cost')
+            result.user_shares = context.get('user_shares')
             
             return result
             
@@ -793,8 +802,9 @@ class GeminiAnalyzer:
             curr_price = today.get('close')
             if curr_price and curr_price != 'N/A':
                 try:
+                    # 恢复 15 秒超时时间，避免因 Google Sheets 响应慢被强制切断
                     req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=5) as res:
+                    with urllib.request.urlopen(req, timeout=15) as res:
                         content = res.read().decode('utf-8-sig')
                         reader = csv.reader(io.StringIO(content))
                         for row in reader:
@@ -803,11 +813,17 @@ class GeminiAnalyzer:
                                 if r_code == code:
                                     my_cost = float(str(row[1]).replace(',', '').strip())
                                     my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
-                except: pass
+                except Exception as sheet_err:
+                    logger.warning(f"获取云端持仓数据失败(超时或网络问题): {sheet_err}")
+
                 if my_cost:
+                    # 绑定到 context 中，供最终 Result 提取
+                    context['user_cost'] = my_cost
+                    context['user_shares'] = my_shares
+
                     profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
                     status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
-                    personal_status_text += f"\n### 💰 机构持仓底牌 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 法官最高指令**：用户目前处于{status_emoji}状态。如果严重套牢，你必须在作战计划中明确给出【动态追踪防守位】，不可再扛单！\n"
+                    personal_status_text += f"\n### 💰 机构持仓底牌 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 法官最高指令**：用户目前处于{status_emoji}状态。你必须在 `position_strategy` 的 `personal_cost_review` 字段中显式输出对这一成本的分析！\n"
 
             # 【2. 进阶指标三剑客 (MACD + KDJ + BOLL)】
             try:
@@ -919,7 +935,7 @@ class GeminiAnalyzer:
 |------|------|------|------|
 | {today.get('close', 'N/A')} 元 | {today.get('pct_chg', 'N/A')}% | {self._format_volume(today.get('volume'))} | {self._format_amount(today.get('amount'))} |
 
-### 均线系统
+### 均线系统 (如果为 N/A 请自动向下降维寻找防守点)
 | MA5 | MA10 | MA20 | 均线形态 |
 |------|------|------|------|
 | {today.get('ma5', 'N/A')} | {today.get('ma10', 'N/A')} | {today.get('ma20', 'N/A')} | {context.get('ma_status', '未知')} |
@@ -975,8 +991,8 @@ class GeminiAnalyzer:
 2. **ATR 网格战法**：根据日均真实波幅，给出 T+0 高抛低吸的网格具体价格间距（在 `grid_trading_plan` 中）。
 3. **指标三剑客**：MACD/KDJ/BOLL 目前处于什么阶段？
 4. **量化仓位**：根据目前的胜率/盈亏比，给出具体的百分比建议仓位（如 15%）。
-5. **追踪止损**：必须给出具体的跌破价格作为防守线。
-6. **复盘反思**：如果打脸回测显示你上次错了，务必在 `risk_alerts` 中深刻认错。
+5. **绝对禁止 N/A**：如果缺失均线等支撑位数据，必须以收盘价或前低直接测算出**绝对数字**作为防守止损位，不准填 N/A。
+6. **成本与打脸强制响应**：如果系统传入了您的持仓成本或指出您昨天的判断翻车了，必须显式响应并道歉反思！
 """
         
         return prompt
