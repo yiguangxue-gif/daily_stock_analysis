@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (A股超神特化·完美防N/A满血版)
+A股自选股智能分析系统 - AI分析层 (A股超神特化·100%满血无删减版)
 ===================================
 
 职责：
@@ -9,8 +9,9 @@ A股自选股智能分析系统 - AI分析层 (A股超神特化·完美防N/A满
 2. 利用 Google Search Grounding 获取实时新闻 (双引擎交叉验证)
 3. 【A股特化】龙虎榜追踪、连板基因、OBV能量潮、CCI妖股雷达、大盘宏观水温
 4. 【极致升维】绝对连板探测、市值风格资金承载力鉴别、均线绝对多空排列
-5. 【终极防N/A】本地强算所有缺失数据，并在解析层强制拦截 AI 偷懒行为，彻底歼灭 N/A！
+5. 【终极防N/A】本地强算 MA5/10/20/60、量比与筹码成本，彻底根治 N/A！
 6. 【抗断网引擎】自研 VWAP 筹码分布测算兜底算法，无视 API 频繁断网。
+7. 【满血恢复】完整恢复 _parse_text_response 兜底解析与 batch_analyze 批量方法。
 """
 
 import json
@@ -542,6 +543,28 @@ class GeminiAnalyzer:
 
 请严格输出 JSON 决策仪表盘。包含所有必需的数值字段，绝对禁止输出 N/A。"""
 
+    def _format_volume(self, volume: Optional[float]) -> str:
+        if volume is None: return 'N/A'
+        if volume >= 1e8: return f"{volume / 1e8:.2f} 亿股"
+        elif volume >= 1e4: return f"{volume / 1e4:.2f} 万股"
+        else: return f"{volume:.0f} 股"
+
+    def _format_amount(self, amount: Optional[float]) -> str:
+        if amount is None: return 'N/A'
+        if amount >= 1e8: return f"{amount / 1e8:.2f} 亿元"
+        elif amount >= 1e4: return f"{amount / 1e4:.2f} 万元"
+        else: return f"{amount:.0f} 元"
+
+    def _format_percent(self, value: Optional[float]) -> str:
+        if value is None: return 'N/A'
+        try: return f"{float(value):.2f}%"
+        except: return 'N/A'
+
+    def _format_price(self, value: Optional[float]) -> str:
+        if value is None: return 'N/A'
+        try: return f"{float(value):.2f}"
+        except: return 'N/A'
+
     def _build_market_snapshot(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """获取并整合所有的快照字段，防止由于数据源挂掉导致的大面积 N/A"""
         today = context.get('today', {})
@@ -655,8 +678,44 @@ class GeminiAnalyzer:
                 debate_process=d.get('debate_process'), dashboard=d.get('dashboard'),
                 analysis_summary=d.get('analysis_summary', '完成'), success=True, raw_response=text
             )
-        except:
-            return AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='未知', operation_advice='观望', analysis_summary="大模型JSON解析失败，请检查提示词或API是否正常返回", success=True)
+        except Exception as e:
+            logger.warning(f"JSON 解析失败: {e}，触发纯文本兜底解析")
+            return self._parse_text_response(text, code, name)
+
+    def _parse_text_response(self, response_text: str, code: str, name: str) -> AnalysisResult:
+        """兜底纯文本解析，如果大模型连 JSON 都输出不了或者格式完全错乱"""
+        sentiment_score = 50
+        trend = '震荡'
+        advice = '持有'
+        text_lower = response_text.lower()
+        
+        positive_count = sum(1 for kw in ['看多', '买入', '上涨', '突破', '强势'] if kw in text_lower)
+        negative_count = sum(1 for kw in ['看空', '卖出', '下跌', '跌破', '弱势'] if kw in text_lower)
+        
+        if positive_count > negative_count + 1:
+            sentiment_score, trend, advice, decision_type = 65, '看多', '买入', 'buy'
+        elif negative_count > positive_count + 1:
+            sentiment_score, trend, advice, decision_type = 35, '看空', '卖出', 'sell'
+        else:
+            decision_type = 'hold'
+        
+        return AnalysisResult(
+            code=code, name=name, sentiment_score=sentiment_score, trend_prediction=trend,
+            operation_advice=advice, decision_type=decision_type, confidence_level='低',
+            analysis_summary=response_text[:500] if response_text else '无分析结果',
+            key_points='大模型 JSON 输出破损，触发安全模式。', risk_warning='建议查阅原始文本。',
+            raw_response=response_text, success=True,
+        )
+
+    def batch_analyze(self, contexts: List[Dict[str, Any]], delay_between: float = 2.0) -> List[AnalysisResult]:
+        """批量分析接口"""
+        results = []
+        for i, context in enumerate(contexts):
+            if i > 0:
+                logger.debug(f"等待 {delay_between} 秒后继续...")
+                time.sleep(delay_between)
+            results.append(self.analyze(context))
+        return results
 
 def get_analyzer() -> GeminiAnalyzer:
     return GeminiAnalyzer()
