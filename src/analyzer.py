@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (全球宏观+AI实盘魂穿版)
+A股自选股智能分析系统 - AI分析层 (全球宏观+AI实盘魂穿·无死角修复版)
 ===================================
 
 职责：
 1. 封装 Gemini API 调用逻辑 (附带 OpenAI/Claude 无缝备用)
 2. 利用 Google Search Grounding 获取实时新闻 (双引擎交叉验证)
 3. 【A股特化】龙虎榜追踪、连板基因、OBV能量潮、CCI妖股雷达、大盘宏观水温
-4. 【终极防N/A】本地强算 MA5/10/20/60、量比与筹码成本，彻底根治 N/A！
+4. 【终极防N/A】修复了深层字典指针丢失问题，绝对强杀所有 N/A！
 5. 【反散户魔咒】真假摔洗盘探测、高位诱多拦截、绝对盈亏比测算。
 6. 【全新升级】：加入全球宏观大事件抓取（战争/降息等），强迫 AI 将用户持仓视为“自身真金白银”，给出绝对具象化的操作指令！
 """
@@ -659,6 +659,12 @@ class GeminiAnalyzer:
         if prev_close and close_p:
             try: change_amount = float(close_p) - float(prev_close)
             except: pass
+            
+        # 修复行情来源为 N/A 的问题
+        source_val = rt.get('source', '综合量化强算')
+        source_str = getattr(source_val, 'value', source_val)
+        if str(source_str).strip().upper() in ['N/A', 'NONE', '']:
+            source_str = '综合量化强算'
 
         return {
             "date": context.get('date', '未知'),
@@ -674,7 +680,8 @@ class GeminiAnalyzer:
             "amount": self._format_amount(amt_p),
             "price": self._format_price(rt.get('price', close_p)),
             "volume_ratio": rt.get('volume_ratio', 'N/A'),
-            "turnover_rate": self._format_percent(rt.get('turnover_rate'))
+            "turnover_rate": self._format_percent(rt.get('turnover_rate')),
+            "source": source_str
         }
 
     def _parse_response(self, text: str, code: str, name: str, context: Dict[str, Any] = None) -> AnalysisResult:
@@ -689,11 +696,30 @@ class GeminiAnalyzer:
             m = re.search(r'(\{.*\})', text, re.DOTALL)
             d = json.loads(repair_json(m.group(1) if m else text))
             
-            # 【终极防偷懒拦截器】：强行给 AI 遗漏的 N/A 贴上真实计算数据
-            if context and d.get('dashboard'):
-                dp = d['dashboard'].get('data_perspective', {})
-                bp = d['dashboard'].get('battle_plan', {})
-                pp = dp.get('price_position', {})
+            # 【终极防偷懒拦截器】：修复字典指针丢失导致的 N/A 无法写入 Bug
+            if context:
+                # 强行构建完整的字典嵌套结构，防止因为 AI 漏写字段导致指针挂空
+                if 'dashboard' not in d or not isinstance(d['dashboard'], dict): d['dashboard'] = {}
+                dash = d['dashboard']
+                
+                if 'data_perspective' not in dash or not isinstance(dash['data_perspective'], dict): dash['data_perspective'] = {}
+                dp = dash['data_perspective']
+                if 'price_position' not in dp or not isinstance(dp['price_position'], dict): dp['price_position'] = {}
+                if 'volume_analysis' not in dp or not isinstance(dp['volume_analysis'], dict): dp['volume_analysis'] = {}
+                
+                if 'battle_plan' not in dash or not isinstance(dash['battle_plan'], dict): dash['battle_plan'] = {}
+                bp = dash['battle_plan']
+                if 'sniper_points' not in bp or not isinstance(bp['sniper_points'], dict): bp['sniper_points'] = {}
+                if 'position_strategy' not in bp or not isinstance(bp['position_strategy'], dict): bp['position_strategy'] = {}
+                
+                if 'intelligence' not in dash or not isinstance(dash['intelligence'], dict): dash['intelligence'] = {}
+                intel = dash['intelligence']
+                
+                # 建立真实指针
+                pp = dp['price_position']
+                va = dp['volume_analysis']
+                sp = bp['sniper_points']
+                ps = bp['position_strategy']
                 
                 # 强行覆盖 MA 数据
                 if _is_empty_or_na(pp.get('ma5')): pp['ma5'] = f"{context.get('calc_ma5', 0):.2f}"
@@ -706,12 +732,10 @@ class GeminiAnalyzer:
                 if _is_empty_or_na(pp.get('resistance_level')): 
                     pp['resistance_level'] = f"{context.get('calc_poc', 0):.2f}元" 
 
-                va = dp.get('volume_analysis', {})
                 if _is_empty_or_na(va.get('volume_ratio')): 
                     va['volume_ratio'] = f"{context.get('calc_vr', 1.0):.2f}"
                 
-                sp = bp.get('sniper_points', {})
-                # 强行基于 ATR 算止损位
+                # 强行基于 ATR 算止损位 (现在绝对能写入真实的数据结构)
                 if _is_empty_or_na(sp.get('trailing_stop')):
                     calc_atr = context.get('calc_atr', 0.0)
                     curr_p = context.get('computed_close', 0.0)
@@ -728,7 +752,6 @@ class GeminiAnalyzer:
                     else:
                         sp['take_profit'] = "逢高止盈"
 
-                ps = bp.get('position_strategy', {})
                 qs = str(ps.get('quant_position_sizing', ''))
                 if _is_empty_or_na(qs) or 'N/A' in qs.upper():
                     ps['quant_position_sizing'] = "20% (防守位)"
@@ -744,26 +767,36 @@ class GeminiAnalyzer:
                 elif op in ['卖出', '减仓', '强烈卖出']: decision_type = 'sell'
                 else: decision_type = 'hold'
             
-            # 为了能在邮件中展示出魂穿操作和宏观影响，我们把它们加到 analysis_summary 中
+            # 解决 Markdown 多行渲染截断问题：将宏观和实盘指令放入最安全的 analysis_summary 中
             dashboard = d.get('dashboard', {})
-            intelligence = dashboard.get('intelligence', {})
-            battle_plan = dashboard.get('battle_plan', {})
+            intel = dashboard.get('intelligence', {})
+            bp = dashboard.get('battle_plan', {})
             
-            macro_impact = intelligence.get('macro_impact', '')
-            ai_real_op = battle_plan.get('ai_real_operation', '')
+            macro_impact = intel.get('macro_impact', '')
+            ai_real_op = bp.get('ai_real_operation', '')
             
-            # 把这两个核心新属性塞进 key_points，保证前端邮件能看到
-            enhanced_points = d.get('key_points', '')
-            if ai_real_op:
-                enhanced_points = f"🤖【AI实盘模拟】: {ai_real_op}\n\n🌍【全球宏观局势】: {macro_impact}\n\n" + enhanced_points
+            original_summary = d.get('analysis_summary', '分析完成')
+            enhanced_summary = ""
+            
+            if macro_impact and macro_impact != "N/A" and "..." not in macro_impact:
+                enhanced_summary += f"🌍 【宏观大局】: {macro_impact}\n\n"
+            if ai_real_op and ai_real_op != "N/A" and "..." not in ai_real_op:
+                enhanced_summary += f"🤖 【AI实盘魂穿】: {ai_real_op}\n\n"
+            
+            enhanced_summary += f"📝 【综合总结】: {original_summary}"
+            
+            # 将增强后的内容覆盖给 analysis_summary，保证不被外部 Markdown 破坏
+            d['analysis_summary'] = enhanced_summary
+            # 清空 key_points 避免冗余或触发发信端崩溃
+            d['key_points'] = ""
 
             return AnalysisResult(
                 code=code, name=name, sentiment_score=int(d.get('sentiment_score', 50)),
                 trend_prediction=d.get('trend_prediction', '震荡'), operation_advice=d.get('operation_advice', '持有'),
                 decision_type=decision_type, confidence_level=d.get('confidence_level', '中'),
                 debate_process=d.get('debate_process'), dashboard=dashboard,
-                analysis_summary=d.get('analysis_summary', '完成'), 
-                key_points=enhanced_points, # 覆盖掉原有的 key_points 以展示新功能
+                analysis_summary=enhanced_summary, 
+                key_points="", 
                 success=True, raw_response=text
             )
         except Exception as e:
