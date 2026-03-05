@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (A股超神特化·完美缩进修复版)
+A股自选股智能分析系统 - AI分析层 (动态限流与自动降级版)
 ===================================
 
 职责：
 1. 封装 Gemini API 调用逻辑 (附带 OpenAI/Claude 无缝备用)
 2. 利用 Google Search Grounding 获取实时新闻 (双引擎交叉验证)
 3. 【A股特化】龙虎榜追踪、连板基因、OBV能量潮、CCI妖股雷达、大盘宏观水温
-4. 【最新加强】跳空缺口、日内K线实体动能、MA60牛熊分界、筹码集中度变盘雷达
-5. 【终极防N/A】本地强算 MA5/10/20/60、量比与筹码成本，彻底根治面板显示 N/A 问题！
-6. 【抗断网引擎】自研 VWAP 筹码分布测算兜底算法，无视 API 频繁断网。
+4. 【终极防N/A】本地强算 MA5/10/20/60、量比与筹码成本，彻底根治面板显示 N/A 问题！
+5. 【动态限流护盾】智能读取 Google 429 报错的秒数进行精准休眠，并支持中途自动降级模型。
 """
 
 import json
@@ -234,6 +233,19 @@ class GeminiAnalyzer:
 
     def is_available(self) -> bool:
         return bool(self._model or self._anthropic_client or self._openai_client)
+    
+    def _switch_to_fallback_model(self) -> bool:
+        """中途被限流时，动态降级到备用模型"""
+        try:
+            import google.generativeai as genai
+            cfg = get_config()
+            fallback_model = cfg.gemini_model_fallback
+            self._model = genai.GenerativeModel(model_name=fallback_model, system_instruction=self.SYSTEM_PROMPT)
+            self._current_model_name = fallback_model
+            self._using_fallback = True
+            return True
+        except:
+            return False
 
     def _call_api_with_retry(self, prompt: str, gen_cfg: dict) -> str:
         if self._use_anthropic:
@@ -250,7 +262,10 @@ class GeminiAnalyzer:
             )
             return res.choices[0].message.content
 
-        max_retries = max(get_config().gemini_max_retries, 5)
+        # 提高重试上限至 8 次，应对 Google API 不稳定的限流
+        max_retries = max(get_config().gemini_max_retries, 8)
+        tried_fallback = getattr(self, '_using_fallback', False)
+        
         for attempt in range(max_retries):
             try:
                 resp = self._model.generate_content(prompt, generation_config=gen_cfg, request_options={"timeout": 120})
@@ -258,11 +273,28 @@ class GeminiAnalyzer:
                     return resp.text
             except Exception as e:
                 err_str = str(e).lower()
-                if '429' in err_str or 'quota' in err_str:
-                    logger.warning(f"触发限流，休眠 15 秒... ({attempt+1}/{max_retries})")
-                    time.sleep(15)
+                # 捕获 429 额度限制或请求过多
+                if '429' in err_str or 'quota' in err_str or 'rate' in err_str:
+                    # 动态提取 Google 要求等待的精确秒数
+                    match = re.search(r'retry in (\d+\.?\d*)s', err_str)
+                    if match:
+                        sleep_time = float(match.group(1)) + 3.0  # 多加 3 秒缓冲
+                    else:
+                        sleep_time = 30.0  # 默认兜底休眠 30 秒
+                    
+                    logger.warning(f"⚠️ [Gemini] 触发 API 限流，系统指令要求休眠 {sleep_time:.1f} 秒... ({attempt+1}/{max_retries})")
+                    
+                    # 尝试一半次数仍失败后，直接降级模型
+                    if attempt >= max_retries // 2 and not tried_fallback:
+                        logger.warning("🔄 [Gemini] 尝试次数过多，触发防降级机制，切换至备用模型...")
+                        if self._switch_to_fallback_model():
+                            tried_fallback = True
+                            
+                    time.sleep(sleep_time)
                 else:
+                    logger.warning(f"❌ [Gemini] 其他 API 错误: {str(e)[:100]}，休眠 5 秒... ({attempt+1}/{max_retries})")
                     time.sleep(5)
+                    
                 if attempt == max_retries - 1: 
                     raise e
         return ""
