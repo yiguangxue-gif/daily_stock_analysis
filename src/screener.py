@@ -4,13 +4,7 @@
 A股游资量化选股雷达 - 超跌反弹特化版 (抗断流·双引擎装甲版)
 ===================================
 
-【重要声明】：此模块为全新加入的独立选股雷达，绝不影响或删减原有的 analyzer.py 核心分析引擎功能。
-
-设计理念：专治“一买就跌”，寻找跌无可跌、主力刚刚进场点火的右侧反弹拐点。
-
-核心升级：
-1. 引入【新浪财经】备用行情源。若东方财富限流，瞬间无缝切换。
-2. 本地全量强算：不依赖外部接口提供的“量比”和“60日跌幅”，直接通过 K 线底层推算，实现降维打击。
+【当前版本】：适度宽松版。为了能选出标的，放宽了跌幅和量比的限制。
 """
 
 import akshare as ak
@@ -30,7 +24,6 @@ class ReboundScreener:
         self.target_count = 0
 
     def _fetch_with_retry(self, func, retries=3, delay=2, *args, **kwargs):
-        """基础网络重试模块"""
         for attempt in range(retries):
             try:
                 return func(*args, **kwargs)
@@ -40,7 +33,6 @@ class ReboundScreener:
                 time.sleep(delay + attempt)
 
     def get_market_spot(self):
-        """双引擎全市场数据抓取：东财主引擎 -> 新浪备用引擎"""
         try:
             logger.info("尝试获取 [东方财富] 全量行情 (主引擎)...")
             df = self._fetch_with_retry(ak.stock_zh_a_spot_em, retries=2, delay=2)
@@ -54,15 +46,13 @@ class ReboundScreener:
             logger.warning(f"东方财富接口受限或被墙 ({str(e)[:50]})")
             logger.warning("🔄 正在自动无缝切换至【新浪财经】备用全市场接口...")
             
-        # 降级切换到新浪财经接口
         try:
             df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=3, delay=3)
-            # 新浪返回的代码带 sh/sz 前缀，需清理
             df['code'] = df['代码'].str.replace(r'^[a-zA-Z]+', '', regex=True)
             df['name'] = df['名称']
             df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
             df['amount'] = pd.to_numeric(df['成交额'], errors='coerce').fillna(0)
-            df['market_cap'] = 0  # 新浪接口无总市值，我们用成交额替代过滤
+            df['market_cap'] = 0  
             return df, "SinaFinance"
         except Exception as e:
             logger.error(f"❌ 双引擎全军覆没，请检查代理或 GitHub Actions 网络设置: {e}")
@@ -71,7 +61,6 @@ class ReboundScreener:
     def run_screen(self):
         logger.info("========== 启动【超跌反弹】量化选股雷达 ==========")
         
-        # 1. 获取全市场实时行情
         df, source = self.get_market_spot()
         if df.empty:
             return []
@@ -81,30 +70,26 @@ class ReboundScreener:
         
         # 2. 基础排雷与粗筛
         df = df[~df['name'].str.contains('ST|退')]
-        df = df[~df['code'].str.startswith(('8', '4'))] # 剔除北交所
+        df = df[~df['code'].str.startswith(('8', '4'))] 
         
-        # 今天必须是红盘 (涨幅 >= 1.5%)，且成交额大于 3000 万（剔除流动性枯竭的死股）
-        df = df[df['pct_chg'] >= 1.5]
+        # 【放宽条件 1】：今天只要红盘 (>0%) 就行，成交额大于3000万
+        df = df[df['pct_chg'] > 0.0]
         df = df[df['amount'] >= 30000000]
         
-        # 如果是东财数据，我们可以顺便用市值过滤；如果是新浪数据，这一步跳过
         if source == "EastMoney":
             df = df[(df['market_cap'] >= 20 * 100000000) & (df['market_cap'] <= 500 * 100000000)]
-            candidates = df.head(80) # 东方财富数据全，可以直接取前80
+            candidates = df.head(100) 
         else:
-            # 新浪数据：按今日涨跌幅从大到小排，抽取前 150 名进去查 K 线强算
-            candidates = df.sort_values(by='pct_chg', ascending=False).head(150)
+            candidates = df.sort_values(by='pct_chg', ascending=False).head(200)
 
         logger.info(f"粗筛完成：锁定 {len(candidates)} 只异动标的。进入 K 线底层强算阶段...")
 
         final_stocks = []
         
-        # 3. 精筛阶段 (K线强算与形态识别)
         for idx, row in candidates.iterrows():
             code = row['code']
             name = row['name']
             try:
-                # 获取近一年 K 线
                 hist = self._fetch_with_retry(
                     ak.stock_zh_a_hist, 
                     retries=2, 
@@ -121,16 +106,16 @@ class ReboundScreener:
                 sp = hist['收盘']
                 sv = hist['成交量']
                 
-                # 【核心强算 1：真实 60日跌幅】(自己算，不求人)
+                # 【放宽条件 2：真实 60日跌幅】只要跌幅超过 10% 就算超跌
                 drop_60d = (sp.iloc[-1] - sp.iloc[-60]) / sp.iloc[-60] * 100
-                if drop_60d > -15.0:
-                    continue # 没跌透，不要！
+                if drop_60d > -10.0:
+                    continue 
                     
-                # 【核心强算 2：真实量比】(今天成交量 / 过去5天平均量)
+                # 【放宽条件 3：真实量比】只要不缩量就行 (大于 1.0)
                 avg_vol_5 = sv.iloc[-6:-1].mean()
                 vr = sv.iloc[-1] / avg_vol_5 if avg_vol_5 > 0 else 1.0
-                if vr < 1.2:
-                    continue # 没放量，主力没进场，不要！
+                if vr < 1.0:
+                    continue 
                 
                 # --- KDJ 黄金坑计算 ---
                 low_min9 = hist['最低'].rolling(9, min_periods=1).min()
@@ -141,23 +126,20 @@ class ReboundScreener:
                 d = k.ewm(com=2, adjust=False).mean()
                 j = 3 * k - 2 * d
                 
-                # 必须在过去3天内下过水（极度超卖/黄金坑），今天开始上翘
+                # 【放宽条件 4】：J值下过 20 (超卖区) 即可，今天上翘
                 j_min_3d = j.iloc[-4:-1].min()
                 j_today = j.iloc[-1]
                 j_yest = j.iloc[-2]
                 
-                # --- MACD 动能计算 ---
                 exp1 = sp.ewm(span=12, adjust=False).mean()
                 exp2 = sp.ewm(span=26, adjust=False).mean()
                 macd = exp1 - exp2
                 signal = macd.ewm(span=9, adjust=False).mean()
                 hist_bar = macd - signal
                 
-                # 绿柱必须正在缩短，或者红柱正在放大
                 macd_improving = hist_bar.iloc[-1] > hist_bar.iloc[-2]
                 
-                # === 终极点火确认 ===
-                if j_min_3d < 5 and j_today > j_yest and macd_improving:
+                if j_min_3d < 20 and j_today > j_yest and macd_improving:
                     final_stocks.append({
                         "代码": code,
                         "名称": name,
@@ -167,9 +149,8 @@ class ReboundScreener:
                         "量比": f"{vr:.2f}",
                         "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
-                    logger.info(f"🎯 捕获超跌反弹金股: {name} ({code}) - 跌幅:{drop_60d:.1f}% 量比:{vr:.1f}")
+                    logger.info(f"🎯 捕获反弹金股: {name} ({code}) - 跌幅:{drop_60d:.1f}% 量比:{vr:.1f}")
 
-                # 轻微随机休眠，防反爬
                 time.sleep(random.uniform(0.2, 0.5))
                 
             except Exception as e:
@@ -181,13 +162,13 @@ class ReboundScreener:
 
     def _print_report(self, stocks):
         print("\n" + "="*80)
-        print("                 🏆 A股【超跌反弹·右侧点火】绝密股票池")
+        print("                 🏆 A股【超跌反弹·右侧点火】备选股票池")
         print("="*80)
         if not stocks:
-            print("🧊 当前市场环境恶劣，没有符合【超跌且底部放量反弹】的标的，建议管住手！")
+            print("🧊 即使放宽了条件，依然没有符合的标的，今天绝对是极端行情，必须管住手！")
             return
             
-        print(f"共锁定 {self.target_count} 只主力资金正在点火的底部标的：\n")
+        print(f"共锁定 {self.target_count} 只底部出现异动的标的：\n")
         
         header = f"{'代码':<10} | {'名称':<10} | {'现价':<8} | {'今日涨幅':<8} | {'60日深跌':<10} | {'量比(强算)':<10} | {'今日成交额'}"
         print(header)
