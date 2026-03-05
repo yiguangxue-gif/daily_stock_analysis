@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (A股超神特化·100%满血无删减版)
+A股自选股智能分析系统 - AI分析层 (反散户魔咒·终极防收割版)
 ===================================
 
 职责：
 1. 封装 Gemini API 调用逻辑 (附带 OpenAI/Claude 无缝备用)
 2. 利用 Google Search Grounding 获取实时新闻 (双引擎交叉验证)
 3. 【A股特化】龙虎榜追踪、连板基因、OBV能量潮、CCI妖股雷达、大盘宏观水温
-4. 【极致升维】绝对连板探测、市值风格资金承载力鉴别、均线绝对多空排列
-5. 【终极防N/A】无死角 N/A 粉碎机，正则清理各种变体，绝对消灭 N/A！
-6. 【抗断网引擎】自研 VWAP 筹码分布测算兜底算法，无视 API 频繁断网。
+4. 【终极防N/A】本地强算 MA5/10/20/60、量比与筹码成本，彻底根治 N/A！
+5. 【反散户魔咒】新增：真假摔洗盘探测、高位诱多拦截、绝对盈亏比测算，专治"一买就跌，一卖就涨"！
 """
 
 import json
@@ -138,18 +137,23 @@ class AnalysisResult:
 
 
 class GeminiAnalyzer:
-    SYSTEM_PROMPT = """你是一位深谙中国A股“资金市”、“情绪市”与“龙头战法”的顶级游资操盘手兼风控总监。
+    SYSTEM_PROMPT = """你是一位深谙中国A股“资金市”、“情绪市”与“主力收割套路”的顶级游资操盘手兼风控总监。
 
-## 🛑 反偷懒协议 (Anti-N/A Protocol) - 优先级最高
-1. 完整输出 JSON 要求的所有数值字段！绝对禁止在数值型字段输出 "N/A" 或空。
-2. 仓位策略必须是一个明确的百分比(如 `20%` 或 `0%`)。
-3. 如果支撑压力等数据缺失，必须通过当前收盘价向下按百分比强行推算止损位。
+## 🛑 反偷懒与强制量化协议 (优先级最高)
+1. 完整输出 JSON 要求的所有数值字段！绝对禁止输出 "N/A" 或空。
+2. 即使你觉得缺乏数据，你也必须依靠你的逻辑和系统提供的防守位，给出明确的【买入位】和【止损位】数字。
+3. 仓位策略必须是一个明确的百分比(如 `20%` 或 `0%`)。
 
-## 🧠 A股专属思维链 (CoT)
+## 🧠 【反散户魔咒】专属推演 (必须深刻分析)
 在输出结论前，必须在 `debate_process` 展现内部推演：
-1. 【打板接力客】：重点分析【连板高度】、【市值风格】、【资金面】与【妖股基因】。微小盘股只看情绪和连板，大盘股看趋势。
-2. 【公募风控总监】：查MA60/日内实体/OBV背离/大盘。防范主力诱多。
-3. 【铁血总舵主】：结合个人成本和回测雷达进行终审。如果套牢，严格按 ATR 给割肉位；若被打脸，必须认错！
+1. 【防卖飞专家(打板客)】：重点分析《反收割雷达》中的“洗盘 vs 出货”指标。如果系统提示是【恶意洗盘】，你必须痛骂散户的恐惧，让其死死拿住！
+2. 【防站岗总监(风控官)】：重点排查诱多！如果系统提示是【高位爆量诱多】或盈亏比极低，你必须喝止用户的买入冲动，严禁接飞刀或追高！
+3. 【铁血总舵主】：结合个人成本和回测雷达进行终审。给出绝对冷血的仓位和交易数字！
+
+## A股反收割终极法则
+- **一买就跌病**：绝大多数是因为在“缩量上涨的末期”或“爆量滞涨的上影线”追高。看到这种形态，必须管住手。
+- **一卖就涨病**：绝大多数是因为主力“缩量砸破重要均线(如MA10/20)”制造恐慌。遇到极度缩量且未破底的下跌，打死不卖。
+- 永远在“右侧放量突破”或“左侧极度缩量回踩强支撑”时买入。
 
 ## 输出格式：决策仪表盘 JSON (必须是纯 JSON)
 ```json
@@ -160,7 +164,7 @@ class GeminiAnalyzer:
     "dashboard": {
         "core_conclusion": { "one_sentence": "...", "signal_type": "...", "time_sensitivity": "...", "position_advice": { "no_position": "...", "has_position": "..." } },
         "data_perspective": {
-            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "...", "gap_and_trend": "...", "chip_concentration": "..." },
+            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "...", "anti_harvest_radar": "这里填入系统提供的洗盘/诱多判定！" },
             "indicator_trinity": { "macd_status": "...", "kdj_cci_status": "...", "boll_status": "..." },
             "price_position": { "current_price": 0.0, "ma5": 0.0, "ma10": 0.0, "ma20": 0.0, "bias_ma5": 0.0, "bias_status": "...", "support_level": "XX元", "resistance_level": "XX元" },
             "volume_analysis": { "volume_ratio": 0.0, "turnover_rate": 0.0, "volume_status": "...", "obv_trend": "..." }
@@ -315,7 +319,7 @@ class GeminiAnalyzer:
             prompt = self._format_prompt(context, name, news_context, google_news_text)
             res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
             
-            # 注意：把 context 传进去，方便在解析层使用强算数据来覆盖 AI 的 N/A
+            # 传入 context，用于强制兜底替换 AI 输出的 N/A
             result = self._parse_response(res_text, code, name, context)
             
             result.market_snapshot = self._build_market_snapshot(context)
@@ -339,10 +343,13 @@ class GeminiAnalyzer:
         curr_price = self._safe_float(today.get('close'))
         
         vwap_60 = syn_profit_ratio = calc_ma5 = calc_ma10 = calc_ma20 = calc_ma60 = calc_vr = current_atr = poc_price = 0.0
-        gap_str = ma5_trend = cci_status = obv_status = kdj_status = boll_status = macd_status = gene_str = cv_status = ma60_status = k_body_status = "未知"
+        gap_str = cci_status = obv_status = kdj_status = boll_status = macd_status = gene_str = cv_status = ma60_status = k_body_status = "未知"
         lianban_status = "未连板"
         style_str = "风格未知"
-        ma_alignment = "均线缠绕"
+        
+        # 反魔咒核心变量
+        washout_status = "正常震荡"
+        rr_status = "无法测算"
 
         rt = context.get('realtime', {})
         total_mv = rt.get('total_mv', None)
@@ -363,45 +370,80 @@ class GeminiAnalyzer:
                         df[c] = pd.to_numeric(df[c], errors='coerce').ffill().fillna(0)
                 sp, sv = df['close'], df['volume']
                 
-                # 存入 context 以备 _build_market_snapshot 强行使用，防缺失
+                # 存入 context 以备兜底
                 context['computed_close'] = sp.iloc[-1]
                 context['computed_open'] = df['open'].iloc[-1]
                 context['computed_high'] = df['high'].iloc[-1]
                 context['computed_low'] = df['low'].iloc[-1]
                 context['computed_volume'] = sv.iloc[-1]
-                if 'amount' in df.columns:
-                    context['computed_amount'] = df['amount'].iloc[-1]
-                if 'pct_chg' in df.columns:
-                    context['computed_pct_chg'] = df['pct_chg'].iloc[-1]
+                if 'amount' in df.columns: context['computed_amount'] = df['amount'].iloc[-1]
+                if 'pct_chg' in df.columns: context['computed_pct_chg'] = df['pct_chg'].iloc[-1]
                 
                 if sv.sum() > 0:
                     vwap_60 = (sp * sv).sum() / sv.sum()
-                    if curr_price: 
-                        syn_profit_ratio = df[sp <= curr_price]['volume'].sum() / sv.sum() * 100
+                    if curr_price: syn_profit_ratio = df[sp <= curr_price]['volume'].sum() / sv.sum() * 100
                 
                 calc_ma5 = sp.rolling(5, min_periods=1).mean().iloc[-1]
                 calc_ma10 = sp.rolling(10, min_periods=1).mean().iloc[-1]
                 calc_ma20 = sp.rolling(20, min_periods=1).mean().iloc[-1]
                 calc_ma60 = sp.rolling(60, min_periods=1).mean().iloc[-1]
                 
-                # 放入 context 供大模型防偷懒替换使用
                 context['calc_ma5'] = calc_ma5
                 context['calc_ma10'] = calc_ma10
                 context['calc_ma20'] = calc_ma20
-
-                if calc_ma5 > calc_ma10 > calc_ma20: ma_alignment = "🔥短线绝对多头排列"
-                elif calc_ma5 < calc_ma10 < calc_ma20: ma_alignment = "🧊短线绝对空头排列"
                 
                 calc_vr = (sv.iloc[-1] / sv.iloc[-6:-1].mean()) if len(sv)>=6 and sv.iloc[-6:-1].mean()>0 else 1.0
                 context['calc_vr'] = calc_vr
                 
-                k_body_pct = (curr_price - df['open'].iloc[-1]) / df['open'].iloc[-1] * 100 if curr_price and df['open'].iloc[-1] else 0
-                k_body_status = "🔴大阳做多" if k_body_pct > 2 else "🟢大阴/长上影抛压" if k_body_pct < -2 else "⚪多空平衡"
+                # 均线布林带等常规计算...
+                ma20 = sp.rolling(20, min_periods=1).mean()
+                std20 = sp.rolling(20, min_periods=1).std().fillna(0)
+                upper = ma20 + 2 * std20
+                lower = ma20 - 2 * std20
+                boll_status = "🚀突破上轨(极易被砸)" if curr_price and curr_price > upper.iloc[-1] else "🕳️破下轨" if curr_price and curr_price < lower.iloc[-1] else "中轨运行"
                 
-                cv_20 = (sp.tail(20).std() / sp.tail(20).mean() * 100) if sp.tail(20).mean() > 0 else 0
-                cv_status = "🎯筹码高度集中" if cv_20 < 5 else "💥筹码极度发散" if cv_20 > 15 else "正常"
-                ma60_status = "🐂站上牛熊线" if curr_price and curr_price > calc_ma60 else "🐻跌破牛熊线"
+                current_atr = pd.concat([df['high']-df['low'], (df['high']-sp.shift()).abs(), (df['low']-sp.shift()).abs()], axis=1).max(axis=1).rolling(14, min_periods=1).mean().iloc[-1]
+                context['calc_atr'] = current_atr
                 
+                if sp.nunique() > 1:
+                    poc_price = df.groupby(pd.cut(sp, bins=12, duplicates='drop'), observed=False)['volume'].sum().idxmax().mid 
+                else:
+                    poc_price = curr_price or 0.0
+                context['calc_poc'] = poc_price
+
+                # ====================================================
+                # ⚔️ 专治“一买就跌，一卖就涨”核心计算：真假摔与盈亏比
+                # ====================================================
+                if curr_price and 'pct_chg' in df.columns:
+                    chg_today = df['pct_chg'].iloc[-1]
+                    
+                    # 1. 主力洗盘 vs 出货 判定
+                    if chg_today < -2 and calc_vr < 0.7 and curr_price > calc_ma20:
+                        washout_status = "📉 【恶意洗盘】跌幅大但极度缩量且未破20日线！大概率是洗盘逼你割肉，打死不卖！"
+                    elif chg_today < -2 and calc_vr > 1.5 and curr_price < calc_ma20:
+                        washout_status = "🩸 【放量出货】放量暴跌破位，主力真逃跑，不要幻想反弹，立刻止损！"
+                    elif chg_today > 2 and calc_vr > 2.0 and curr_price > upper.iloc[-1]:
+                        washout_status = "🌋 【高位诱多】爆量刺破布林带上轨！极易形成长上影线骗炮，千万别追高接盘！"
+                    elif chg_today > 2 and calc_vr <= 1.2:
+                        washout_status = "🚀 【锁仓拉升】缩量/平量上涨，说明主力高度控盘没人抛，拿稳别下车！"
+                    else:
+                        washout_status = "震荡博弈阶段，方向不明"
+
+                    # 2. 绝对盈亏比计算 (凯利公式降维版)
+                    # 假设止损位设在下方 1.5 倍 ATR，阻力位设在 POC
+                    stop_loss_p = curr_price - 1.5 * current_atr if current_atr > 0 else curr_price * 0.95
+                    risk = curr_price - stop_loss_p
+                    reward = poc_price - curr_price if poc_price > curr_price else 0
+                    if risk > 0:
+                        rr_ratio = reward / risk
+                        if rr_ratio < 1.0:
+                            rr_status = f"盈亏比极差({rr_ratio:.2f})！上方空间很小(仅到{poc_price:.2f})，向下风险大，严禁盲目开仓！"
+                        elif rr_ratio > 2.0:
+                            rr_status = f"盈亏比极佳({rr_ratio:.2f})！防守位{stop_loss_p:.2f}，值得博弈大肉。"
+                        else:
+                            rr_status = f"盈亏比一般({rr_ratio:.2f})，控制仓位。"
+
+                # 连板基因等常规数据...
                 if 'pct_chg' in df.columns:
                     lianban_count = 0
                     for val in reversed(df['pct_chg'].tolist()):
@@ -413,54 +455,20 @@ class GeminiAnalyzer:
                     zt_count = len(df_hist_15[df_hist_15['pct_chg'] >= 9.5])
                     gene_str = f"🔥近15日涨停{zt_count}次" if zt_count >= 2 else "🌟近15日涨停1次" if zt_count == 1 else "🧊近期无涨停"
                 
-                if len(df) >= 2:
-                    y_h, y_l = df['high'].iloc[-2], df['low'].iloc[-2]
-                    t_l, t_h = df['low'].iloc[-1], df['high'].iloc[-1]
-                    if t_l > y_h: gap_str = f"🚀向上跳空({y_h:.2f}-{t_l:.2f})"
-                    elif t_h < y_l: gap_str = f"🕳️向下跳空({t_h:.2f}-{y_l:.2f})"
-                
-                ma5_trend = "↗️向上" if len(sp)>=2 and sp.rolling(5).mean().iloc[-1] > sp.rolling(5).mean().iloc[-2] else "↘️向下"
-                
-                tp = (df['high'] + df['low'] + sp) / 3
-                md = tp.rolling(14, min_periods=1).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
-                cci_val = ((tp - tp.rolling(14, min_periods=1).mean()) / (0.015 * md.replace(0, 1e-9))).iloc[-1]
-                cci_status = "🔥超买主升" if cci_val > 100 else "🥶超跌错杀" if cci_val < -100 else "震荡"
-
                 df['obv'] = (np.sign(sp.diff().fillna(0)) * sv).cumsum()
-                obv_status = "🌊资金吸筹(OBV向好)" if len(df)>=5 and df['obv'].iloc[-1] > df['obv'].iloc[-5] else "🩸诱多派发(OBV背离)"
-                
-                l9, h9 = sp.rolling(9, min_periods=1).min(), sp.rolling(9, min_periods=1).max()
-                j_val = (3 * ((sp - l9) / (h9 - l9).replace(0, 1e-9) * 100).ewm(com=2).mean() - 2 * ((sp - l9) / (h9 - l9).replace(0, 1e-9) * 100).ewm(com=2).mean().ewm(com=2).mean()).iloc[-1]
-                kdj_status = "💡超卖" if j_val < 0 else "⚠️超买钝化" if j_val > 100 else "安全"
-                
-                ma20, std20 = sp.rolling(20, min_periods=1).mean(), sp.rolling(20, min_periods=1).std().fillna(0)
-                boll_status = "🚀破上轨(防砸)" if curr_price and curr_price > (ma20 + 2 * std20).iloc[-1] else "🕳️破下轨" if curr_price and curr_price < (ma20 - 2 * std20).iloc[-1] else "中轨运行"
-                
-                macd = sp.ewm(span=12).mean() - sp.ewm(span=26).mean()
-                macd_status = "🔴死叉" if (macd - macd.ewm(span=9).mean()).iloc[-1] < 0 else "🟢金叉"
-                
-                current_atr = pd.concat([df['high']-df['low'], (df['high']-sp.shift()).abs(), (df['low']-sp.shift()).abs()], axis=1).max(axis=1).rolling(14, min_periods=1).mean().iloc[-1]
-                context['calc_atr'] = current_atr
-                
-                if sp.nunique() > 1:
-                    poc_price = df.groupby(pd.cut(sp, bins=12, duplicates='drop'), observed=False)['volume'].sum().idxmax().mid 
-                else:
-                    poc_price = curr_price or 0.0
-                context['calc_poc'] = poc_price
+                obv_status = "🌊资金真实吸筹" if len(df)>=5 and df['obv'].iloc[-1] > df['obv'].iloc[-5] else "🩸量价背离诱多"
                 
             except Exception as e:
-                logger.debug(f"指标计算异常: {e}")
+                logger.debug(f"反魔咒引擎计算异常: {e}")
 
         t_ma5 = today.get('ma5') if today.get('ma5') not in [None, 'N/A', ''] else f"{calc_ma5:.2f}"
         t_ma10 = today.get('ma10') if today.get('ma10') not in [None, 'N/A', ''] else f"{calc_ma10:.2f}"
         t_ma20 = today.get('ma20') if today.get('ma20') not in [None, 'N/A', ''] else f"{calc_ma20:.2f}"
         rt_vr = context.get('realtime', {}).get('volume_ratio') if context.get('realtime', {}).get('volume_ratio') not in [None, 'N/A', ''] else f"{calc_vr:.2f}"
         
-        bias_ma5 = "0.00%"
-        if curr_price and calc_ma5:
-            bias_ma5 = f"{((curr_price - calc_ma5)/calc_ma5*100):+.2f}%"
+        bias_ma5 = f"{((curr_price - calc_ma5)/calc_ma5*100):+.2f}%" if curr_price and calc_ma5 else "0.00%"
 
-        pst = "\n## 💎 A股强算引擎数据中心\n"
+        pst = "\n## 💎 A股强算与反收割数据中心\n"
         my_cost, my_shares = None, None
         try:
             url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
@@ -481,31 +489,8 @@ class GeminiAnalyzer:
             context['user_cost'] = my_cost
             context['user_shares'] = my_shares
             profit_pct = ((curr_price - my_cost) / my_cost * 100)
-            pst += f"### 💰 持仓底牌\n* 成本价：{my_cost:.2f} 元 | 盈亏：{profit_pct:.2f}%\n* 🚨 必须在 personal_cost_review 针对此成本输出策略！\n"
+            pst += f"### 💰 持仓底牌\n* 成本价：{my_cost:.2f} 元 | 盈亏：{profit_pct:.2f}%\n* 🚨 必须在 personal_cost_review 针对此成本输出保本或止损策略！\n"
         
-        try:
-            fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
-            flow_desc = f"东方财富内资净流入: {fund_flow.iloc[-1]['主力净流入-净额']/10000:.1f}万"
-            try:
-                hk_funds = ak.stock_hsgt_stock_statistics_em()
-                my_hk = hk_funds[hk_funds['代码'] == code]
-                if not my_hk.empty:
-                    hk_v = my_hk.iloc[0]['今日增持估计-市值']
-                    flow_desc += f" | 北向资金: {'🟢流入' if hk_v > 0 else '🔴出逃'} {abs(hk_v)/10000:.1f}万"
-            except: pass
-            
-            lhb_desc = "暂无数据"
-            try:
-                end_date_str = datetime.now().strftime('%Y%m%d')
-                start_date_str = (datetime.now() - timedelta(days=10)).strftime('%Y%m%d')
-                lhb_df = ak.stock_lhb_detail_em(start_date=start_date_str, end_date=end_date_str)
-                if not lhb_df.empty:
-                    my_lhb = lhb_df[lhb_df['代码'] == code]
-                    lhb_desc = f"🚨 近10日登榜 {len(my_lhb)} 次(有顶级游资运作)" if not my_lhb.empty else "🧊 未上龙虎榜"
-            except: pass
-            pst += f"### 🌊 资金与游资雷达\n* {flow_desc}\n* {lhb_desc}\n"
-        except: pass
-
         try:
             db_file = "reports/ai_trade_log.csv"
             if os.path.isfile(db_file):
@@ -514,22 +499,18 @@ class GeminiAnalyzer:
                 if len(df_code) >= 2:
                     past_p = float(df_code.iloc[-2]['ClosePrice'])
                     ai_impact = ((float(curr_price) - past_p) / past_p) * 100
-                    pst += f"### ⚖️ 机构打脸回测雷达\n* 上次分析时价: {past_p:.2f} | 至今变动: {ai_impact:.2f}%\n* 💥 打脸复盘硬指令：如果走势与你看多相反导致亏损，必须在《风险提示》认错！\n"
+                    pst += f"### ⚖️ 机构打脸回测雷达\n* 上次分析时价: {past_p:.2f} | 至今变动: {ai_impact:.2f}%\n* 💥 打脸复盘硬指令：如果走势与你看多相反导致亏损，必须在《风险提示》检讨认错！\n"
         except: pass
 
-        pst += f"""### 🎯 量化三剑客与A股特化指标
-* 市值风格测算: {style_str}
-* 均线多空排列: {ma_alignment}
-* 连板高度状态: {lianban_status}
-* 历史涨停基因: {gene_str}
-* K线日内多空: {k_body_status} | MA60牛熊分界: {ma60_status}
-* 筹码变盘雷达: {cv_status} | 缺口雷达: {gap_str} | MA5斜率: {ma5_trend}
-* CCI 妖股雷达: {cci_status} | OBV 资金潮汐: {obv_status}
-* KDJ: {kdj_status} | BOLL: {boll_status} | MACD: {macd_status}
-* ATR 真实波幅: {current_atr:.2f}元 (网格T+0核心) | POC 历史筹码峰: 约 {poc_price:.2f}元
+        pst += f"""### 🎯 反收割核心雷达 (极其重要)
+* 👁️‍🗨️ 真假摔/洗盘/诱多判定: **{washout_status}**
+* ⚖️ 绝对盈亏比测算: **{rr_status}**
+* 🚀 股性与连板: {lianban_status} | 基因: {gene_str}
+* 📊 资金潮汐: {obv_status} | ATR 真实波幅: {current_atr:.2f}元
+* 🧱 最大套牢筹码峰 (绝对压力位): 约 {poc_price:.2f}元
 """
         
-        return f"""# A股顶级机构决策: {name}({code})
+        return f"""# A股反收割最高决策: {name}({code})
 {pst}
 ## 📈 基础盘面
 收盘价: {curr_price} | MA5: {t_ma5} | MA10: {t_ma10} | MA20: {t_ma20}
@@ -540,7 +521,7 @@ class GeminiAnalyzer:
 引擎一(全网搜索): {news or "无"}
 引擎二(Google快讯): {google_news or "无"}
 
-请严格输出 JSON 决策仪表盘。包含所有必需的数值字段，绝对禁止输出 N/A。"""
+请严格输出 JSON 决策仪表盘。注意：必须将上述【反收割核心雷达】里的“洗盘/诱多判定”写入 `anti_harvest_radar` 字段，并在决策中严格遵循它！绝对禁止输出 N/A。"""
 
     def _format_volume(self, volume: Optional[float]) -> str:
         if volume is None: return 'N/A'
@@ -661,7 +642,7 @@ class GeminiAnalyzer:
                 ps = bp.get('position_strategy', {})
                 qs = str(ps.get('quant_position_sizing', ''))
                 if _is_empty_or_na(qs) or 'N/A' in qs.upper():
-                    ps['quant_position_sizing'] = "20% (系统默认防守仓位)"
+                    ps['quant_position_sizing'] = "20% (防守位)"
 
             ai_stock_name = d.get('stock_name')
             if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
@@ -686,7 +667,6 @@ class GeminiAnalyzer:
             return self._parse_text_response(text, code, name)
 
     def _parse_text_response(self, response_text: str, code: str, name: str) -> AnalysisResult:
-        """兜底纯文本解析，如果大模型连 JSON 都输出不了或者格式完全错乱"""
         sentiment_score = 50
         trend = '震荡'
         advice = '持有'
@@ -711,7 +691,6 @@ class GeminiAnalyzer:
         )
 
     def batch_analyze(self, contexts: List[Dict[str, Any]], delay_between: float = 2.0) -> List[AnalysisResult]:
-        """批量分析接口"""
         results = []
         for i, context in enumerate(contexts):
             if i > 0:
