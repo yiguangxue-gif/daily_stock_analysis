@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (A股本土实战战法 + 绝对强制兜底版)
+A股游资量化选股雷达 - AI 自进化闭环 (图片三战法定制 + 绝对防弹兜底版)
 ===================================
 """
 
@@ -165,26 +165,54 @@ class ReboundScreener:
         df = hist.copy()
         # 强制转换为浮点数，防清洗出错
         df['收盘'] = pd.to_numeric(df['收盘'], errors='coerce')
+        df['开盘'] = pd.to_numeric(df['开盘'], errors='coerce')
+        df['最低'] = pd.to_numeric(df['最低'], errors='coerce')
         df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
         
         df['MA5'] = df['收盘'].rolling(5).mean()
         df['MA10'] = df['收盘'].rolling(10).mean()
         df['MA20'] = df['收盘'].rolling(20).mean()
-        df['MA60'] = df['收盘'].rolling(60).mean()
         
         df['VMA5'] = df['成交量'].rolling(5).mean()
         
-        # A股特色：判断近期是否有涨停基因 (>9.0% 就算)
-        df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.0
-        df['Limit_Up_Count_20'] = df['Is_Limit_Up'].rolling(20).sum()
+        # MACD
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['Hist'] = df['MACD'] - df['Signal']
+        
+        # 连板基因 (涨幅大于9.5%)
+        df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
+        df['Limit_Up_Count_10'] = df['Is_Limit_Up'].rolling(10).sum()
         
         return df
+        
+    def _generate_fallback_ai_data(self, candidates):
+        """💥 断网物理直出机制：当 AI API 彻底连不上时，伪造数据格式强行发件"""
+        top_5 = []
+        for c in candidates[:5]:
+            top_5.append({
+                "code": c['代码'],
+                "name": c['名称'],
+                "strategy": c['匹配策略'],
+                "current_price": c['现价'],
+                "reason": f"AI服务超时，系统按【{c['匹配策略']}】战法物理直出。今日涨幅: {c['今日涨幅']}",
+                "target_price": "动态止盈",
+                "stop_loss": "破位离场"
+            })
+            
+        return {
+            "ai_reflection": "【系统断网警报】⚠️ Google Gemini API 响应超时，AI 反思模块下线。以下股票为底层量化模型强制输出。",
+            "macro_view": "【系统断网警报】⚠️ 无法生成宏观解读，按纯技术面选股。",
+            "top_5": top_5
+        }
 
     def ai_select_top5(self, candidates, macro_news, review_summary):
         logger.info("🧠 正在唤醒 AI 基金经理进行自进化和深度筛选...")
         if not self.config.gemini_api_key:
-            logger.error("未配置 GEMINI_API_KEY，无法执行 AI 智能精选！")
-            return None
+            logger.error("未配置 GEMINI_API_KEY，触发断网物理直出模式！")
+            return self._generate_fallback_ai_data(candidates)
 
         cand_text = ""
         for c in candidates:
@@ -226,25 +254,39 @@ class ReboundScreener:
 }}
 ```
 """
+        # ==============================================================
+        # 🛡️ 绝对防弹的 API 调用包裹层，抓取所有 504 异常并直出数据
+        # ==============================================================
         try:
             import google.generativeai as genai
+            import warnings
+            warnings.filterwarnings("ignore") # 忽略过期警告
             genai.configure(api_key=self.config.gemini_api_key)
             model = genai.GenerativeModel(model_name=self.config.gemini_model)
             
-            response = model.generate_content(
-                prompt, 
-                generation_config={"temperature": 0.6, "max_output_tokens": 4096},
-                request_options={"timeout": 60}
-            )
-            
-            text = response.text
-            m = re.search(r'(\{.*\})', text, re.DOTALL)
-            json_str = m.group(1) if m else text
-            result_data = json.loads(repair_json(json_str))
-            return result_data
-        except Exception as e:
-            logger.error(f"AI 智能精选失败: {e}")
-            return None
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = model.generate_content(
+                        prompt, 
+                        generation_config={"temperature": 0.6, "max_output_tokens": 4096},
+                        request_options={"timeout": 120} # 超时延长至120秒
+                    )
+                    
+                    text = response.text
+                    m = re.search(r'(\{.*\})', text, re.DOTALL)
+                    json_str = m.group(1) if m else text
+                    return json.loads(repair_json(json_str))
+                except Exception as inner_e:
+                    logger.warning(f"⚠️ AI 智能精选第 {attempt + 1} 次尝试失败: {inner_e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+                    else:
+                        logger.error(f"❌ AI 接口彻底挂掉 (Timeout)，启动物理直出兜底模式！")
+                        return self._generate_fallback_ai_data(candidates)
+        except Exception as outer_e:
+            logger.error(f"❌ AI 初始化发生严重崩溃: {outer_e}，强行降级输出！")
+            return self._generate_fallback_ai_data(candidates)
 
     def send_email_report(self, ai_data, review_records, target_count):
         logger.info("📧 正在生成并发送选股邮件报告...")
@@ -289,16 +331,16 @@ class ReboundScreener:
         top5_html = ""
         if ai_data and "top_5" in ai_data and len(ai_data["top_5"]) > 0:
             top5_html += f"""
-            <h3>🧠 A股实战游资大鳄全局反思</h3>
+            <h3>🧠 A股实战游资战法全局反思</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
                 <p><b>🔄 闭环反思：</b>{ai_data.get('ai_reflection', '无')}</p>
                 <p><b>🌍 宏观定调：</b>{ai_data.get('macro_view', '无')}</p>
             </div>
             
-            <h3>🏆 今日 TOP 5 实战金股 (自 {target_count} 只主力异动池精选)</h3>
+            <h3>🏆 今日 TOP 5 定制战法金股 (自 {target_count} 只异动池精选)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #1a2942; color: #ffffff;">
-                    <th>代码</th><th>名称</th><th>命中量化战法</th><th>现价</th><th>操作防守位</th><th>AI 机构买入逻辑</th>
+                    <th>代码</th><th>名称</th><th>命中量化战法</th><th>现价</th><th>操作防守位</th><th>系统买入逻辑</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
@@ -306,7 +348,7 @@ class ReboundScreener:
                 <tr>
                     <td><b>{s.get('code', '')}</b></td>
                     <td><b>{s.get('name', '')}</b></td>
-                    <td><span style="background:#ffeaa7; color:#d35400; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 12px;">{s.get('strategy', 'AI优选')}</span></td>
+                    <td><span style="background:#ffeaa7; color:#d35400; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 12px;">{s.get('strategy', '未定义')}</span></td>
                     <td>{s.get('current_price', '')}</td>
                     <td style="font-size: 13px;">🎯 {s.get('target_price', '')}<br>🛑 {s.get('stop_loss', '')}</td>
                     <td style="font-size: 13px;">{s.get('reason', '')}</td>
@@ -314,22 +356,22 @@ class ReboundScreener:
                 """
             top5_html += "</table>"
         else:
-            top5_html = "<p>🧊 AI 生成数据失败，未能解析出股票。</p>"
+            top5_html = "<p>🧊 系统遇到致命错误，无法提取任何数据。</p>"
 
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 AI自进化选股雷达 ({today_str})</h2>
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 三大游资战法雷达 ({today_str})</h2>
             {review_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由 A股游资核心战法 + 绝对兜底机制生成，保证每日送达。</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由三大核心战法 + 绝对防弹兜底机制生成，保证每日送达。</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【A股实战游资】AI 闭环复盘与 TOP 5 金股 - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【A股三大战法】AI 闭环复盘与 TOP 5 金股 - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "AI智能选股"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -351,14 +393,14 @@ class ReboundScreener:
     def run_screen(self):
         socket.setdefaulttimeout(10.0)
 
-        logger.info("========== 启动【A股实战游资】多策略选股雷达 ==========")
+        logger.info("========== 启动【A股三大定制战法】选股雷达 ==========")
         
         df, source = self.get_market_spot()
         if df.empty: return
             
         review_summary, review_records = self.process_review_and_history(df)
         
-        # 1. 宽泛初筛：只剔除垃圾股，保障成交额 > 1亿
+        # 1. 宽泛初筛：剔除垃圾股，保障成交额 > 1亿
         df = df[~df['name'].str.contains('ST|退')]
         df = df[~df['code'].str.startswith(('8', '4', '68'))] 
         df = df[df['amount'] >= 100000000]
@@ -367,6 +409,7 @@ class ReboundScreener:
         logger.info(f"👉 初筛完成：锁定全市场 {len(candidates)} 只高活跃标的，即将启动 K 线因子强算...")
 
         quant_pool = []
+        backup_pool = [] 
         total_c = len(candidates)
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
@@ -377,17 +420,19 @@ class ReboundScreener:
             name = row['name']
             try:
                 hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=2, delay=1, symbol=code, period="daily", start_date="20231001", adjust="qfq")
-                if hist is None or len(hist) < 60: continue
+                if hist is None or len(hist) < 30: continue
                 
                 tech_df = self.calculate_technical_indicators(hist)
                 last = tech_df.iloc[-1]
                 prev = tech_df.iloc[-2]
                 
                 close_p = float(last['收盘'])
+                open_p = float(last['开盘'])
+                low_p = float(last['最低'])
+                
                 ma5 = float(last['MA5'])
                 ma10 = float(last['MA10'])
                 ma20 = float(last['MA20'])
-                ma60 = float(last['MA60'])
                 
                 vma5 = float(last['VMA5'])
                 vol = float(last['成交量'])
@@ -395,65 +440,71 @@ class ReboundScreener:
                 
                 strategy_matched = None
                 
-                # 【A股战法 1：🔥 游资·主升突破】(资金主攻方向)
-                # 条件：多头排列，今天放量(>1.5)，近期有涨停基因，今日涨幅>2%
-                if close_price > ma5 > ma20 and vr > 1.5 and last['Limit_Up_Count_20'] >= 1 and row['pct_chg'] > 2:
-                    strategy_matched = "🔥 游资·主升突破"
+                # ========================================================
+                # 🎯 完全定制你的三大选股策略
+                # ========================================================
+                
+                # 【策略 1：MACD金叉+放量阳线】
+                # 条件：MACD今日红柱(>0)且昨日绿柱(<=0)，量比>1.5，收盘>开盘，涨幅>2%
+                macd_cross = (last['Hist'] > 0 and prev['Hist'] <= 0)
+                if macd_cross and vr > 1.5 and close_p > open_p and row['pct_chg'] > 2.0:
+                    strategy_matched = "📈 MACD金叉+放量阳线"
                     
-                # 【A股战法 2：🐉 游资·龙回头】(高辨识度妖股回踩)
-                # 条件：近期有涨停，今天缩量(量比<0.8)，回踩到 20 日线附近企稳
-                elif last['Limit_Up_Count_20'] >= 1 and vr < 0.8 and abs(close_p - ma20)/ma20 < 0.04:
-                    strategy_matched = "🐉 游资·龙回头"
+                # 【策略 2：均线多头+缩量回踩】
+                # 条件：均线多头(MA5>MA10>MA20)，今日缩量(量比<0.8)，今日跌幅不大(>-4%)，且最低价或收盘价回踩靠近MA10或MA20
+                elif ma5 > ma10 > ma20 and vr < 0.8 and row['pct_chg'] > -4.0:
+                    dist_ma10 = min(abs(close_p - ma10)/ma10, abs(low_p - ma10)/ma10)
+                    dist_ma20 = min(abs(close_p - ma20)/ma20, abs(low_p - ma20)/ma20)
+                    if dist_ma10 < 0.02 or dist_ma20 < 0.02:
+                        strategy_matched = "🌊 均线多头+缩量回踩"
                     
-                # 【A股战法 3：🌊 机构·底部异动】(抄底第一根大阳线)
-                # 条件：前期在MA60下方运行，今日突然放倍量(>2.0)且收红
-                elif prev['收盘'] < float(prev['MA60']) and vr > 2.0 and row['pct_chg'] > 0:
-                    strategy_matched = "🌊 机构·底部异动"
+                # 【策略 3：强势连板首阴低吸】
+                # 条件：近10天内有过连续涨停(>=2次)，今日收阴线(收盘<开盘且涨幅<0)，且不是死死封跌停(涨幅>-9%)
+                elif last['Limit_Up_Count_10'] >= 2 and close_p < open_p and -9.0 < row['pct_chg'] < 0:
+                    strategy_matched = "🔥 强势连板首阴低吸"
 
-                # 【A股战法 4：📈 机构·稳健长牛】(慢牛白马股)
-                # 条件：完美的均线多头(MA20>MA60)，今天没跌，且没有缩量太狠
-                elif ma20 > ma60 and close_p > ma20 and row['pct_chg'] > -1 and vr > 0.8:
-                    strategy_matched = "📈 机构·稳健长牛"
-
+                # 记录符合策略的股票
                 if strategy_matched:
                     quant_pool.append({
                         "代码": code, "名称": name, "现价": close_p,
                         "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
                         "量比": f"{vr:.2f}", "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
+                elif row['pct_chg'] > 1.0: 
+                    # 只要红盘且涨幅大于1%的，抓进兜底池
+                    backup_pool.append({
+                        "代码": code, "名称": name, "现价": close_p,
+                        "匹配策略": "🛡️ 兜底资金活口", "今日涨幅": f"{row['pct_chg']:.2f}%", 
+                        "量比": f"{vr:.2f}", "成交额": f"{row['amount']/100000000:.1f}亿"
+                    })
                     
                 time.sleep(random.uniform(0.1, 0.3))
             except Exception as e:
-                # 记录但不中断，继续下一只
                 continue
                 
         # =========================================================
-        # 💣 物理级强制兜底机制：绕过所有K线计算，强行从活跃池里抓壮丁！
+        # 💣 物理级强制兜底机制：缺几只，补几只！
         # =========================================================
         if len(quant_pool) < 5:
             needed = 5 - len(quant_pool)
             existing_codes = {q['代码'] for q in quant_pool}
-            logger.warning(f"⚠️ 四大实战策略仅选出 {len(quant_pool)} 只股票，触发【物理级兜底】，强行抓取 {needed} 只资金活口！")
+            logger.warning(f"⚠️ 三大策略仅选出 {len(quant_pool)} 只，触发物理级兜底补充 {needed} 只！")
             
-            # 第一波兜底：找今天收红盘、成交额最大的票
-            safe_candidates = candidates[candidates['pct_chg'] > 0].sort_values(by='amount', ascending=False)
-            for _, r in safe_candidates.iterrows():
-                if r['code'] not in existing_codes:
-                    quant_pool.append({
-                        "代码": r['code'], "名称": r['name'], "现价": r['close'],
-                        "匹配策略": "🛡️ 资金抱团·核心活口", "今日涨幅": f"{r['pct_chg']:.2f}%", 
-                        "量比": "N/A", "成交额": f"{r['amount']/100000000:.1f}亿"
-                    })
-                    existing_codes.add(r['code'])
+            # 从兜底池按涨幅排序补充
+            backup_pool = sorted(backup_pool, key=lambda x: float(x['今日涨幅'].strip('%')), reverse=True)
+            for r in backup_pool:
+                if r['代码'] not in existing_codes:
+                    quant_pool.append(r)
+                    existing_codes.add(r['代码'])
                 if len(quant_pool) >= 5: break
                 
-            # 第二波终极兜底：如果连红盘的都没有5只(千股跌停)，直接按成交额硬拿前5名！
+            # 如果极度冰点连备胎都不够，硬抓全市场大屁股
             if len(quant_pool) < 5:
                 for _, r in candidates.sort_values(by='amount', ascending=False).iterrows():
                     if r['code'] not in existing_codes:
                         quant_pool.append({
                             "代码": r['code'], "名称": r['name'], "现价": r['close'],
-                            "匹配策略": "🩸 极致冰点·恐慌避风港", "今日涨幅": f"{r['pct_chg']:.2f}%", 
+                            "匹配策略": "🩸 极致冰点硬拿", "今日涨幅": f"{r['pct_chg']:.2f}%", 
                             "量比": "N/A", "成交额": f"{r['amount']/100000000:.1f}亿"
                         })
                         existing_codes.add(r['code'])
@@ -464,8 +515,8 @@ class ReboundScreener:
         ai_result = None
         if quant_pool:
             macro_news = self.fetch_macro_news()
-            # 排序传给AI，优先展示游资战法选出来的
-            sorted_pool = sorted(quant_pool, key=lambda x: "活口" not in x['匹配策略'] and "冰点" not in x['匹配策略'], reverse=True)[:30]
+            # 排序传给AI，真实策略排在前面，兜底的在后面
+            sorted_pool = sorted(quant_pool, key=lambda x: ("兜底" not in x['匹配策略'] and "冰点" not in x['匹配策略']), reverse=True)[:30]
             ai_result = self.ai_select_top5(sorted_pool, macro_news, review_summary)
             if ai_result and "top_5" in ai_result:
                 self.save_todays_picks(ai_result["top_5"])
@@ -473,11 +524,11 @@ class ReboundScreener:
         self.send_email_report(ai_result, review_records, self.target_count)
         
         print("\n" + "="*80)
-        print(f"          🏆 A股【实战游资+强制兜底】成功捕获 {self.target_count} 只标的")
+        print(f"          🏆 A股【定制三大战法+防弹兜底】成功捕获 {self.target_count} 只标的")
         print("="*80)
         if review_records: print(f"✅ 昨日实盘打脸核算完毕！")
         if ai_result and "top_5" in ai_result:
-            print(f"🌟 绝不空仓！AI 已为你选出今日最强 TOP 5 阵容！")
+            print(f"🌟 绝不空仓！最强阵容已生成！")
             if self.config.email_sender:
                 print("📧 报告已发送至您的邮箱！")
         print("================================================================================")
