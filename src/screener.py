@@ -1,15 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环版
+A股专业量化选股雷达 - AI 自进化闭环 (五大私募级策略矩阵)
 ===================================
-
-核心能力：
-1. 【量化初筛】：双引擎全市场扫描，过滤出底层有异动的超跌反弹标的。
-2. 【昨日复盘】：自动核算上一个交易日选出股票的真实盈亏。
-3. 【AI 自我反思】：将复盘结果喂给大模型，让 AI 根据真实打脸结果总结经验，优化策略。
-4. 【宏观优选】：结合今日全球宏观突发新闻，从初筛池中精选出胜率最高的 TOP 5 金股。
-5. 【自动触达】：将复盘结果与今日金股打包，一键发送至用户邮箱。
 """
 
 import akshare as ak
@@ -33,7 +26,6 @@ from json_repair import repair_json
 
 from src.config import get_config
 
-# 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
@@ -44,17 +36,14 @@ class ReboundScreener:
         os.makedirs("data", exist_ok=True)
 
     def _fetch_with_retry(self, func, retries=3, delay=2, *args, **kwargs):
-        """强力网络重试装甲"""
         for attempt in range(retries):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                if attempt == retries - 1:
-                    raise e
+                if attempt == retries - 1: raise e
                 time.sleep(delay + attempt)
 
     def get_market_spot(self):
-        """双引擎全市场数据抓取"""
         try:
             logger.info("尝试获取 [东方财富] 全量行情 (主引擎)...")
             df = self._fetch_with_retry(ak.stock_zh_a_spot_em, retries=2, delay=2)
@@ -82,7 +71,6 @@ class ReboundScreener:
             return pd.DataFrame(), "NONE"
 
     def fetch_macro_news(self):
-        """抓取全球宏观突发新闻"""
         logger.info("正在扫描全球宏观与 A股突发大事件...")
         news_text = "今日无重大全球性突发宏观事件"
         try:
@@ -92,14 +80,12 @@ class ReboundScreener:
             with urllib.request.urlopen(req, timeout=5) as res:
                 root = ET.fromstring(res.read())
                 lines = [f"- {it.find('title').text}" for it in root.findall('.//item')[:5]]
-                if lines: 
-                    news_text = "\n".join(lines)
+                if lines: news_text = "\n".join(lines)
         except Exception as e:
             logger.debug(f"获取宏观新闻失败: {e}")
         return news_text
 
     def process_review_and_history(self, market_df):
-        """复盘昨日选股，核算真实盈亏，并准备给 AI 喂料"""
         today_str = datetime.now().strftime('%Y-%m-%d')
         review_summary = "暂无往期复盘数据。"
         review_records = []
@@ -109,17 +95,14 @@ class ReboundScreener:
 
         try:
             df_hist = pd.read_csv(self.history_file)
-            # 找到 Date_T1 为空的行（即之前选出但还未复盘的股票）
             unreviewed = df_hist[df_hist['Date_T1'].isna() | (df_hist['Date_T1'] == '')]
             
             if not unreviewed.empty:
                 logger.info(f"🔍 发现 {len(unreviewed)} 只待复盘的历史金股，正在核算真实盈亏...")
-                total_return = 0
-                win_count = 0
+                total_return, win_count = 0, 0
                 
                 for idx, row in unreviewed.iterrows():
                     code = str(row['Code']).zfill(6)
-                    # 从今天的全市场行情中找到这只股的今天收盘价
                     match = market_df[market_df['code'] == code]
                     if not match.empty:
                         t1_price = float(match.iloc[0]['close'])
@@ -138,18 +121,16 @@ class ReboundScreener:
                                 "今收价": t1_price, "真实涨跌幅": f"{ret_pct:+.2f}%", "AI逻辑": row.get('AI_Reason', '')[:30]
                             })
                 
-                # 保存复盘结果
                 df_hist.to_csv(self.history_file, index=False)
                 
                 if review_records:
                     avg_ret = total_return / len(review_records)
                     win_rate = (win_count / len(review_records)) * 100
                     
-                    # 生成给 AI 反思的文本
                     review_summary = f"【AI自我进化 - 昨日实盘打脸复盘】\n昨日你精选了 {len(review_records)} 只股票，今日平均真实收益率: {avg_ret:+.2f}%，胜率: {win_rate:.1f}%。\n详细表现如下：\n"
                     for r in review_records:
                         review_summary += f"- {r['名称']}({r['代码']}) | 真实涨跌: {r['真实涨跌幅']} | 你昨天的理由: {r['AI逻辑']}\n"
-                    review_summary += "👉 核心指令：请深刻反思上述复盘结果！如果是正收益，总结经验；如果大面积亏损，说明你的策略被当前市场毒打，必须立即转变今天的选股思路（比如从大盘股切到微盘股，或从科技切到防御）！\n"
+                    review_summary += "👉 核心指令：请深刻反思上述复盘结果！如果是大面积亏损，说明你的策略被当前市场毒打，必须根据今天的新闻立刻转变今天的选股偏好！\n"
                     
         except Exception as e:
             logger.error(f"复盘核算发生异常: {e}")
@@ -157,64 +138,100 @@ class ReboundScreener:
         return review_summary, review_records
 
     def save_todays_picks(self, top5_stocks):
-        """保存今天的精选用于明天的复盘"""
         today_str = datetime.now().strftime('%Y-%m-%d')
         file_exists = os.path.exists(self.history_file)
-        
         try:
             with open(self.history_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 if not file_exists:
                     writer.writerow(['Date_T0', 'Code', 'Name', 'Price_T0', 'Date_T1', 'Price_T1', 'Return_Pct', 'AI_Reason'])
-                
                 for s in top5_stocks:
-                    # 写入今日的买入价（以此作为 T0 基准）
-                    writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', s['reason']])
+                    strategy_tag = f"[{s.get('strategy', 'AI优选')}] "
+                    writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', strategy_tag + s['reason']])
         except Exception as e:
             logger.error(f"保存今日金股失败: {e}")
 
-    def ai_select_top5(self, candidates, macro_news, review_summary):
-        """调用大模型，执行 AI 自进化闭环与 TOP 5 精选"""
-        logger.info("🧠 正在唤醒 AI 基金经理进行自进化和深度筛选...")
+    def calculate_technical_indicators(self, hist):
+        """计算专业的量化技术指标因子"""
+        df = hist.copy()
         
+        # 均线系统
+        df['MA5'] = df['收盘'].rolling(5).mean()
+        df['MA10'] = df['收盘'].rolling(10).mean()
+        df['MA20'] = df['收盘'].rolling(20).mean()
+        df['MA60'] = df['收盘'].rolling(60).mean()
+        df['MA120'] = df['收盘'].rolling(120).mean()
+        
+        # 量能系统
+        df['VMA5'] = df['成交量'].rolling(5).mean()
+        df['VMA60'] = df['成交量'].rolling(60).mean()
+        
+        # 波动率与极值
+        df['Highest_20'] = df['最高'].rolling(20).max()
+        df['Lowest_60'] = df['最低'].rolling(60).min()
+        df['Highest_120'] = df['最高'].rolling(120).max()
+        
+        # MACD
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['Hist'] = df['MACD'] - df['Signal']
+        
+        # RSI 14
+        delta = df['收盘'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss.replace(0, np.nan)
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        # 涨停基因探测 (近似判断：涨幅>9.5%)
+        df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
+        df['Limit_Up_Count_20'] = df['Is_Limit_Up'].rolling(20).sum()
+        
+        return df
+
+    def ai_select_top5(self, candidates, macro_news, review_summary):
+        logger.info("🧠 正在唤醒 AI 基金经理进行自进化和深度筛选...")
         if not self.config.gemini_api_key:
             logger.error("未配置 GEMINI_API_KEY，无法执行 AI 智能精选！")
-            return []
+            return None
 
-        # 将候选股票池格式化成精简文本
+        # 优化候选池展示格式，提供给 AI 更多因子维度
         cand_text = ""
         for c in candidates:
-            cand_text += f"[{c['代码']}] {c['名称']} | 现价:{c['现价']:.2f} | 涨幅:{c['今日涨幅']} | 60日深跌:{c['60日跌幅']} | 量比:{c['量比']}\n"
+            cand_text += f"[{c['代码']}]{c['名称']} | {c['匹配策略']} | 现价:{c['现价']:.2f} | 涨幅:{c['今日涨幅']} | 量比:{c['量比']} | RSI:{c.get('RSI', 'N/A')}\n"
 
-        prompt = f"""你是一位掌管着百亿资金的顶级 A股量化基金经理。
-我刚刚通过量化底层算法，从全市场 5000 只股票中，为你初步筛选出了 {len(candidates)} 只“底部放量、MACD/KDJ拐头”的备选股票池。
-现在，你需要结合【昨日实盘复盘打脸记录】和【今日全球宏观头条】，从这个股票池中，挑选出**你认为胜率最高、最值得买入的 5 只金股**！
+        prompt = f"""你是一位掌管着百亿资金的顶级 A股量化私募基金经理。
+我通过底层的【五大专业私募策略矩阵】（龙回头/VCP突破/机构长牛/左侧底/右侧起爆），从全市场 5000 只股票中，严格筛选出了 {len(candidates)} 只技术面产生极强共振的备选标的。
+现在，你需要结合【昨日实盘复盘记录】和【今日全球宏观头条】，挑选出**最具爆发潜力或最安全的 5 只金股**！
 
 {review_summary}
 
 ### 🌍 今日全球宏观与突发大事件：
 {macro_news}
 
-### 📊 备选股票池 (底层量化已确认技术面企稳)：
+### 📊 专业策略备选池 (已通过严苛因子校验)：
 {cand_text}
 
 ### 🎯 你的任务：
-1. 先根据【昨日复盘】写一段深刻的反思（Self-Reflection）。
-2. 结合【宏观新闻】定调今天的操作方向。
-3. 严格从【备选股票池】中挑选出刚好 5 只爆发潜力最强的股票（代码和名称必须完全对应）。
+1. 深刻反思（Self-Reflection）昨天的盈亏原因。
+2. 结合【宏观新闻】定调今天的操作主线（防御还是进攻？什么板块？）。
+3. 结合各个股票命中的【策略战法】，挑选出刚好 5 只金股。
 
 请严格输出以下 JSON 格式：
 ```json
 {{
-    "ai_reflection": "我对昨天选股结果的深度反思，以及今天我因此做出的策略调整...",
+    "ai_reflection": "我对昨天选股结果的深度反思，以及今天做出的策略调整...",
     "macro_view": "结合突发新闻，我判断今天的核心避险/进攻主线是...",
     "top_5": [
         {{
             "code": "股票代码",
             "name": "股票名称",
+            "strategy": "原样保留上面列表中的匹配策略名",
             "current_price": 当前价格,
-            "reason": "入选核心逻辑（结合宏观、题材和复盘经验，50字左右）",
-            "target_price": "预估短期阻力位（具体数字）",
+            "reason": "入选核心逻辑（结合宏观、量化策略和题材，50字左右）",
+            "target_price": "预估短期目标位（具体数字）",
             "stop_loss": "建议防守止损位（具体数字）"
         }}
     ]
@@ -236,14 +253,12 @@ class ReboundScreener:
             m = re.search(r'(\{.*\})', text, re.DOTALL)
             json_str = m.group(1) if m else text
             result_data = json.loads(repair_json(json_str))
-            
             return result_data
         except Exception as e:
             logger.error(f"AI 智能精选失败: {e}")
             return None
 
     def send_email_report(self, ai_data, review_records, target_count):
-        """生成并发送 HTML 邮件报告"""
         logger.info("📧 正在生成并发送选股邮件报告...")
         
         sender = self.config.email_sender
@@ -251,12 +266,11 @@ class ReboundScreener:
         receivers = self.config.email_receivers or [sender]
         
         if not sender or not pwd:
-            logger.warning("未配置发件邮箱或密码，跳过邮件发送。")
+            logger.warning("❌ 未获取到发件邮箱或密码。请检查 GitHub Secrets 和 screener.yml 是否配置正确！")
             return
 
         today_str = datetime.now().strftime('%Y-%m-%d')
         
-        # 构建昨日复盘 HTML
         review_html = ""
         if review_records:
             total_ret = sum(float(str(r['真实涨跌幅']).replace('%', '')) for r in review_records)
@@ -284,20 +298,19 @@ class ReboundScreener:
                 """
             review_html += "</table><hr>"
 
-        # 构建今日 AI Top 5 HTML
         top5_html = ""
         if ai_data and "top_5" in ai_data:
             top5_html += f"""
-            <h3>🧠 AI 基金经理自我进化与宏观定调</h3>
+            <h3>🧠 AI 私募经理全局视野与复盘</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
-                <p><b>🔄 复盘反思：</b>{ai_data.get('ai_reflection', '无')}</p>
-                <p><b>🌍 宏观视角：</b>{ai_data.get('macro_view', '无')}</p>
+                <p><b>🔄 闭环反思：</b>{ai_data.get('ai_reflection', '无')}</p>
+                <p><b>🌍 宏观定调：</b>{ai_data.get('macro_view', '无')}</p>
             </div>
             
-            <h3>🏆 今日 TOP 5 绝杀金股 (从 {target_count} 只底层异动股中精选)</h3>
+            <h3>🏆 今日 TOP 5 专业绝杀金股 (自 {target_count} 只五大模型备选池精选)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
-                <tr style="background-color: #e6f7ff;">
-                    <th>代码</th><th>名称</th><th>现价</th><th>目标价</th><th>止损价</th><th>AI 入选逻辑 (综合宏观与复盘)</th>
+                <tr style="background-color: #1a2942; color: #ffffff;">
+                    <th>代码</th><th>名称</th><th>命中量化战法</th><th>现价</th><th>操作防守位</th><th>AI 机构买入逻辑</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
@@ -305,30 +318,30 @@ class ReboundScreener:
                 <tr>
                     <td><b>{s.get('code', '')}</b></td>
                     <td><b>{s.get('name', '')}</b></td>
+                    <td><span style="background:#ffeaa7; color:#d35400; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 12px;">{s.get('strategy', 'AI优选')}</span></td>
                     <td>{s.get('current_price', '')}</td>
-                    <td style="color: red;">{s.get('target_price', '')}</td>
-                    <td style="color: green;">{s.get('stop_loss', '')}</td>
+                    <td style="font-size: 13px;">🎯 {s.get('target_price', '')}<br>🛑 {s.get('stop_loss', '')}</td>
                     <td style="font-size: 13px;">{s.get('reason', '')}</td>
                 </tr>
                 """
             top5_html += "</table>"
         else:
-            top5_html = "<p>🧊 今日极端行情，量化雷达未选出合格股票，AI 强烈建议空仓管住手！</p>"
+            top5_html = "<p>🧊 今日市场极其恶劣，五大私募战法全部空仓防御，严禁伸手！</p>"
 
         html_content = f"""
         <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #2c3e50;">🚀 A股 AI自进化选股雷达报告 ({today_str})</h2>
+        <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股私募级 AI自进化选股雷达 ({today_str})</h2>
             {review_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999;">💡 提示：本报告由量化初筛 + AI宏观反思聚合生成。可将看好代码填入 Google 表格进行极深度的盘后体检。</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由五大量化因子模型结合 LLM 宏观强化学习生成。股市有风险，实盘需谨慎。</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = f"【AI自进化选股】大盘复盘与 TOP 5 金股推荐 - {today_str}"
+        msg['Subject'] = f"【私募级量化】AI 闭环复盘与 TOP 5 绝杀金股 - {today_str}"
         msg['From'] = f"{self.config.email_sender_name} <{sender}>"
         msg['To'] = ", ".join(receivers)
         msg.attach(MIMEText(html_content, 'html'))
@@ -341,97 +354,108 @@ class ReboundScreener:
             server.login(sender, pwd)
             server.sendmail(sender, receivers, msg.as_string())
             server.quit()
-            logger.info("✅ 选股复盘邮件发送成功！请查收。")
+            logger.info("✅ 专业选股报告邮件发送成功！请查收。")
         except Exception as e:
             logger.error(f"❌ 邮件发送失败: {e}")
 
     def run_screen(self):
-        logger.info("========== 启动【AI自进化】量化选股雷达 ==========")
+        logger.info("========== 启动【五大私募模型】多策略选股雷达 ==========")
         
-        # 1. 获取全市场并核算昨日真实盈亏
         df, source = self.get_market_spot()
-        if df.empty:
-            return
+        if df.empty: return
             
         review_summary, review_records = self.process_review_and_history(df)
         
-        # 2. 量化初筛
+        # 1. 过滤垃圾股，保障基础流动性
         df = df[~df['name'].str.contains('ST|退')]
-        df = df[~df['code'].str.startswith(('8', '4'))] 
-        df = df[df['pct_chg'] > 0.0]
-        df = df[df['amount'] >= 10000000]
+        df = df[~df['code'].str.startswith(('8', '4', '68'))] # 聚焦主板/创业板
+        df = df[df['amount'] >= 100000000] # 成交额 > 1亿 确保游资和机构能进出
         
-        if source == "EastMoney":
-            df = df[(df['market_cap'] >= 10 * 100000000) & (df['market_cap'] <= 800 * 100000000)]
-            candidates = df.head(100) 
-        else:
-            candidates = df.sort_values(by='pct_chg', ascending=False).head(150)
-
-        logger.info(f"粗筛完成：锁定 {len(candidates)} 只底层异动标的。进入 K 线强算阶段...")
+        # 取活跃度前 400 的标的进入昂贵的 Pandas 因子计算
+        candidates = df.sort_values(by='amount', ascending=False).head(400)
+        logger.info(f"初筛完成：锁定全市场 {len(candidates)} 只高活跃标的，启动深度因子强算...")
 
         quant_pool = []
+        
         for idx, row in candidates.iterrows():
             code = row['code']
             name = row['name']
             try:
-                hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=2, delay=1, symbol=code, period="daily", start_date="20231001", adjust="qfq")
-                if hist is None or len(hist) < 65: continue
+                hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=2, delay=1, symbol=code, period="daily", start_date="20230101", adjust="qfq")
+                if hist is None or len(hist) < 130: continue
                 
-                sp = hist['收盘']
-                sv = hist['成交量']
+                # 获取全套专业指标
+                tech_df = self.calculate_technical_indicators(hist)
+                last = tech_df.iloc[-1]
+                prev = tech_df.iloc[-2]
                 
-                drop_60d = (sp.iloc[-1] - sp.iloc[-60]) / sp.iloc[-60] * 100
-                if drop_60d > -5.0: continue 
+                vr = last['成交量'] / last['VMA5'] if last['VMA5'] > 0 else 1.0
+                drop_60d = (last['收盘'] - last['Lowest_60']) / last['Lowest_60'] * 100 # 相对60日最低点反弹幅度
+                drop_from_high = (last['Highest_20'] - last['收盘']) / last['Highest_20'] * 100 # 20日回撤幅度
+                
+                strategy_matched = None
+                
+                # 【专业战法 1：🐉 顶级游资·龙回头】
+                # 条件：近20天内有至少2个涨停，从最高点回撤15%~30%，今天缩量回踩10日/20日线企稳
+                if last['Limit_Up_Count_20'] >= 2 and 15 < drop_from_high < 30 and vr < 1.0 and row['pct_chg'] > -2:
+                    if abs(last['收盘'] - last['MA10'])/last['MA10'] < 0.03 or abs(last['收盘'] - last['MA20'])/last['MA20'] < 0.03:
+                        strategy_matched = "🐉 顶级游资·龙回头"
+                        
+                # 【专业战法 2：🏆 欧奈尔·VCP突破】
+                # 条件：股价在120日高点附近(距离不超过15%)，近几天量能极度萎缩，今日突然爆量突破
+                elif (last['Highest_120'] - last['收盘'])/last['Highest_120'] < 0.15 and prev['成交量'] < prev['VMA60'] * 0.7:
+                    if vr > 2.0 and row['pct_chg'] > 4.0 and last['收盘'] > last['MA5']:
+                        strategy_matched = "🏆 欧奈尔·VCP起爆"
+                        
+                # 【专业战法 3：📈 机构抱团·趋势长牛】
+                # 条件：长期均线多头排列，走势平滑，RSI健康，不极度放量
+                elif last['MA20'] > last['MA60'] > last['MA120'] and last['收盘'] > last['MA20']:
+                    if 50 < last['RSI'] < 75 and 0 < row['pct_chg'] < 5 and vr < 1.8:
+                        strategy_matched = "📈 机构抱团·趋势长牛"
+
+                # 【专业战法 4：🩸 左侧绝杀·恐慌底】
+                # 条件：股价近期暴跌超25%，RSI极度超卖进入冰点，MACD绿柱不再放大（甚至底背离），今日未再破位
+                elif drop_from_high > 25 and last['RSI'] < 30 and last['Hist'] > prev['Hist'] and row['pct_chg'] >= 0:
+                    strategy_matched = "🩸 左侧绝杀·恐慌底"
                     
-                avg_vol_5 = sv.iloc[-6:-1].mean()
-                vr = sv.iloc[-1] / avg_vol_5 if avg_vol_5 > 0 else 1.0
-                if vr < 0.8: continue 
-                
-                low_min9 = hist['最低'].rolling(9, min_periods=1).min()
-                high_max9 = hist['最高'].rolling(9, min_periods=1).max()
-                denom = (high_max9 - low_min9).replace(0, 1e-9)
-                rsv = (sp - low_min9) / denom * 100
-                k = rsv.ewm(com=2, adjust=False).mean()
-                d = k.ewm(com=2, adjust=False).mean()
-                j = 3 * k - 2 * d
-                
-                if j.iloc[-4:-1].min() < 50 and j.iloc[-1] > j.iloc[-2]:
-                    exp1, exp2 = sp.ewm(span=12).mean(), sp.ewm(span=26).mean()
-                    macd = exp1 - exp2
-                    hist_bar = macd - macd.ewm(span=9).mean()
-                    if hist_bar.iloc[-1] > hist_bar.iloc[-2]:
-                        quant_pool.append({
-                            "代码": code, "名称": name, "现价": sp.iloc[-1],
-                            "今日涨幅": f"{row['pct_chg']:.2f}%", "60日跌幅": f"{drop_60d:.2f}%",
-                            "量比": f"{vr:.2f}", "成交额": f"{row['amount']/100000000:.1f}亿"
-                        })
-                time.sleep(random.uniform(0.1, 0.3))
+                # 【专业战法 5：🔥 右侧点火·均线共振】
+                # 条件：5日线上穿10日线，今日放量且MACD零轴附近起飞
+                elif prev['MA5'] <= prev['MA10'] and last['MA5'] > last['MA10'] and vr > 1.8 and last['Hist'] > 0 and prev['Hist'] <= 0:
+                    strategy_matched = "🔥 右侧点火·均线共振"
+
+                if strategy_matched:
+                    quant_pool.append({
+                        "代码": code, "名称": name, "现价": last['收盘'],
+                        "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
+                        "量比": f"{vr:.2f}", "RSI": f"{last['RSI']:.1f}", "成交额": f"{row['amount']/100000000:.1f}亿"
+                    })
+                time.sleep(random.uniform(0.1, 0.2))
             except: continue
                 
         self.target_count = len(quant_pool)
         
-        # 3. 宏观新闻抓取 & AI 精选 Top 5
         ai_result = None
         if quant_pool:
             macro_news = self.fetch_macro_news()
-            ai_result = self.ai_select_top5(quant_pool, macro_news, review_summary)
-            
-            # 保存 Top 5 以备明天复盘
+            # 从合格池中按策略进行优先级排序，让AI优选 (优先给AI推送龙回头和VCP)
+            sorted_pool = sorted(quant_pool, key=lambda x: ("龙回头" in x['匹配策略'], "VCP" in x['匹配策略']), reverse=True)[:30]
+            ai_result = self.ai_select_top5(sorted_pool, macro_news, review_summary)
             if ai_result and "top_5" in ai_result:
                 self.save_todays_picks(ai_result["top_5"])
         
-        # 4. 发送邮件
+        # 即使空仓也发邮件，确保知道运行结果
         self.send_email_report(ai_result, review_records, self.target_count)
         
-        # 控制台打印简化结果
         print("\n" + "="*80)
-        print("          🏆 A股【AI自进化】今日选股与复盘已发送至邮箱")
+        print(f"          🏆 A股【私募五大模型】捕获 {self.target_count} 只满足严苛条件的标的")
         print("="*80)
-        if review_records: print(f"✅ 昨日选股真实核算完毕！共核算 {len(review_records)} 只股票。")
+        if review_records: print(f"✅ 昨日实盘打脸核算完毕，已喂给 AI 进化模型！")
         if ai_result and "top_5" in ai_result:
-            print(f"🌟 AI 结合宏观大势，已从 {self.target_count} 只初筛池中为你精选出 TOP 5。")
+            print(f"🌟 AI 结合宏观大势，已从量化池中精选出最强 TOP 5！")
+            if self.config.email_sender:
+                print("📧 深度私募级报告已发送至您的邮箱！")
         else:
-            print("🧊 今日市场极度恶劣，AI 强烈要求空仓。")
+            print("🧊 极端死水或崩盘行情，五大专业模型强制熔断空仓，绝不送钱！")
         print("================================================================================")
 
 if __name__ == "__main__":
