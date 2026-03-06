@@ -21,6 +21,8 @@ import xml.etree.ElementTree as ET
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
+from email.utils import formataddr
 from datetime import datetime
 from json_repair import repair_json
 
@@ -59,6 +61,14 @@ class ReboundScreener:
             
         try:
             df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=3, delay=3)
+            logger.info("✅ 新浪财经基础数据拉取完成，正在进行数据清洗...")
+            
+            # 兼容不同版本的 Akshare 字段名，做极客级兜底
+            col_map = {'symbol': '代码', 'name': '名称', 'changepercent': '涨跌幅', 'amount': '成交额', 'trade': '最新价'}
+            for eng, chn in col_map.items():
+                if chn not in df.columns and eng in df.columns:
+                    df[chn] = df[eng]
+                    
             df['code'] = df['代码'].str.replace(r'^[a-zA-Z]+', '', regex=True)
             df['name'] = df['名称']
             df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
@@ -341,8 +351,12 @@ class ReboundScreener:
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = f"【私募级量化】AI 闭环复盘与 TOP 5 绝杀金股 - {today_str}"
-        msg['From'] = f"{self.config.email_sender_name} <{sender}>"
+        # 强制 UTF-8 编码，彻底解决 QQ 邮箱 550 报错
+        msg['Subject'] = Header(f"【私募级量化】AI 闭环复盘与选股雷达 - {today_str}", 'utf-8')
+        
+        # 使用 formataddr 和 Header 规范发件人格式
+        sender_name = self.config.email_sender_name or "AI智能选股"
+        msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
         msg['To'] = ", ".join(receivers)
         msg.attach(MIMEText(html_content, 'html'))
 
@@ -373,15 +387,17 @@ class ReboundScreener:
         
         # 将昂贵的 Pandas 因子计算范围缩小到 150 只，防限流防卡死
         candidates = df.sort_values(by='amount', ascending=False).head(150)
-        logger.info(f"初筛完成：锁定全市场 {len(candidates)} 只高活跃标的，启动深度因子强算...")
+        logger.info(f"👉 初筛完成：锁定全市场 {len(candidates)} 只高活跃标的，即将启动 K 线因子强算...")
+        logger.info(f"👉 预计耗时 2-3 分钟，请耐心等待...")
 
         quant_pool = []
+        backup_pool = [] # 强行兜底池，保证必有股票输出
         total_c = len(candidates)
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
-            # 添加加载进度提示，缓解用户的等待焦虑
-            if i % 20 == 0:
-                logger.info(f"⏳ 正在进行量化因子深度推算... 当前进度: {i} / {total_c}")
+            # 【高频进度播报】：从20次改为10次，缓解等待焦虑
+            if i % 10 == 0:
+                logger.info(f"⏳ 量化推算中... 当前进度: {i} / {total_c}")
                 
             code = row['code']
             name = row['name']
@@ -423,6 +439,10 @@ class ReboundScreener:
                 # 【专业战法 5：🔥 右侧点火·均线共振】
                 elif prev['MA5'] <= prev['MA10'] and last['MA5'] > last['MA10'] and vr > 1.8 and last['Hist'] > 0 and prev['Hist'] <= 0:
                     strategy_matched = "🔥 右侧点火·均线共振"
+                    
+                # 【新增战法 6：⚡ 游资青睐·活跃异动】(防空仓放水版)
+                elif vr > 1.2 and row['pct_chg'] > 1.5 and last['收盘'] > last['MA5']:
+                    strategy_matched = "⚡ 游资青睐·活跃异动"
 
                 if strategy_matched:
                     quant_pool.append({
@@ -430,17 +450,34 @@ class ReboundScreener:
                         "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
                         "量比": f"{vr:.2f}", "RSI": f"{last['RSI']:.1f}", "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
+                else:
+                    # 【强制兜底预备】：如果全都没选中，但今天没跌且有量，丢进备用池！
+                    if row['pct_chg'] > 0 and vr > 1.0:
+                        backup_pool.append({
+                            "代码": code, "名称": name, "现价": last['收盘'],
+                            "匹配策略": "🛡️ 弱市兜底·资金活口", "今日涨幅": f"{row['pct_chg']:.2f}%", 
+                            "量比": f"{vr:.2f}", "RSI": f"{last['RSI']:.1f}", "成交额": f"{row['amount']/100000000:.1f}亿"
+                        })
+                        
                 time.sleep(random.uniform(0.1, 0.3))
             except Exception as e:
                 continue
                 
+        # 【终极强制兜底指令】：不管大盘多烂，强行凑齐给 AI 看！
+        if len(quant_pool) < 5 and backup_pool:
+            needed = 5 - len(quant_pool)
+            # 按今日涨幅从大到小排序，把涨得最好的活口塞进去
+            backup_pool = sorted(backup_pool, key=lambda x: float(x['今日涨幅'].strip('%')), reverse=True)
+            quant_pool.extend(backup_pool[:needed])
+            logger.warning(f"⚠️ 触发强行兜底机制，从死水行情中硬抠出 {min(needed, len(backup_pool))} 只资金活口！")
+            
         self.target_count = len(quant_pool)
         
         ai_result = None
         if quant_pool:
             macro_news = self.fetch_macro_news()
             # 从合格池中按策略进行优先级排序，让AI优选 (优先给AI推送龙回头和VCP)
-            sorted_pool = sorted(quant_pool, key=lambda x: ("龙回头" in x['匹配策略'], "VCP" in x['匹配策略']), reverse=True)[:30]
+            sorted_pool = sorted(quant_pool, key=lambda x: ("龙回头" in x['匹配策略'], "VCP" in x['匹配策略'], "兜底" not in x['匹配策略']), reverse=True)[:30]
             ai_result = self.ai_select_top5(sorted_pool, macro_news, review_summary)
             if ai_result and "top_5" in ai_result:
                 self.save_todays_picks(ai_result["top_5"])
@@ -449,7 +486,7 @@ class ReboundScreener:
         self.send_email_report(ai_result, review_records, self.target_count)
         
         print("\n" + "="*80)
-        print(f"          🏆 A股【私募五大模型】捕获 {self.target_count} 只满足严苛条件的标的")
+        print(f"          🏆 A股【私募五大模型+强制兜底】捕获 {self.target_count} 只异动标的")
         print("="*80)
         if review_records: print(f"✅ 昨日实盘打脸核算完毕，已喂给 AI 进化模型！")
         if ai_result and "top_5" in ai_result:
