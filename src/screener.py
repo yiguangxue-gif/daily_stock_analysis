@@ -371,17 +371,23 @@ class ReboundScreener:
         df = df[~df['code'].str.startswith(('8', '4', '68'))] # 聚焦主板/创业板
         df = df[df['amount'] >= 100000000] # 成交额 > 1亿 确保游资和机构能进出
         
-        # 取活跃度前 400 的标的进入昂贵的 Pandas 因子计算
-        candidates = df.sort_values(by='amount', ascending=False).head(400)
+        # 将昂贵的 Pandas 因子计算范围缩小到 150 只，防限流防卡死
+        candidates = df.sort_values(by='amount', ascending=False).head(150)
         logger.info(f"初筛完成：锁定全市场 {len(candidates)} 只高活跃标的，启动深度因子强算...")
 
         quant_pool = []
+        total_c = len(candidates)
         
-        for idx, row in candidates.iterrows():
+        for i, (idx, row) in enumerate(candidates.iterrows(), 1):
+            # 添加加载进度提示，缓解用户的等待焦虑
+            if i % 20 == 0:
+                logger.info(f"⏳ 正在进行量化因子深度推算... 当前进度: {i} / {total_c}")
+                
             code = row['code']
             name = row['name']
             try:
-                hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=2, delay=1, symbol=code, period="daily", start_date="20230101", adjust="qfq")
+                # 将 start_date 缩短至 20230601，减少下载负担但依然足够计算 MA120
+                hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=2, delay=1, symbol=code, period="daily", start_date="20230601", adjust="qfq")
                 if hist is None or len(hist) < 130: continue
                 
                 # 获取全套专业指标
@@ -396,30 +402,25 @@ class ReboundScreener:
                 strategy_matched = None
                 
                 # 【专业战法 1：🐉 顶级游资·龙回头】
-                # 条件：近20天内有至少2个涨停，从最高点回撤15%~30%，今天缩量回踩10日/20日线企稳
                 if last['Limit_Up_Count_20'] >= 2 and 15 < drop_from_high < 30 and vr < 1.0 and row['pct_chg'] > -2:
                     if abs(last['收盘'] - last['MA10'])/last['MA10'] < 0.03 or abs(last['收盘'] - last['MA20'])/last['MA20'] < 0.03:
                         strategy_matched = "🐉 顶级游资·龙回头"
                         
                 # 【专业战法 2：🏆 欧奈尔·VCP突破】
-                # 条件：股价在120日高点附近(距离不超过15%)，近几天量能极度萎缩，今日突然爆量突破
                 elif (last['Highest_120'] - last['收盘'])/last['Highest_120'] < 0.15 and prev['成交量'] < prev['VMA60'] * 0.7:
                     if vr > 2.0 and row['pct_chg'] > 4.0 and last['收盘'] > last['MA5']:
                         strategy_matched = "🏆 欧奈尔·VCP起爆"
                         
                 # 【专业战法 3：📈 机构抱团·趋势长牛】
-                # 条件：长期均线多头排列，走势平滑，RSI健康，不极度放量
                 elif last['MA20'] > last['MA60'] > last['MA120'] and last['收盘'] > last['MA20']:
                     if 50 < last['RSI'] < 75 and 0 < row['pct_chg'] < 5 and vr < 1.8:
                         strategy_matched = "📈 机构抱团·趋势长牛"
 
                 # 【专业战法 4：🩸 左侧绝杀·恐慌底】
-                # 条件：股价近期暴跌超25%，RSI极度超卖进入冰点，MACD绿柱不再放大（甚至底背离），今日未再破位
                 elif drop_from_high > 25 and last['RSI'] < 30 and last['Hist'] > prev['Hist'] and row['pct_chg'] >= 0:
                     strategy_matched = "🩸 左侧绝杀·恐慌底"
                     
                 # 【专业战法 5：🔥 右侧点火·均线共振】
-                # 条件：5日线上穿10日线，今日放量且MACD零轴附近起飞
                 elif prev['MA5'] <= prev['MA10'] and last['MA5'] > last['MA10'] and vr > 1.8 and last['Hist'] > 0 and prev['Hist'] <= 0:
                     strategy_matched = "🔥 右侧点火·均线共振"
 
@@ -429,8 +430,9 @@ class ReboundScreener:
                         "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
                         "量比": f"{vr:.2f}", "RSI": f"{last['RSI']:.1f}", "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
-                time.sleep(random.uniform(0.1, 0.2))
-            except: continue
+                time.sleep(random.uniform(0.1, 0.3))
+            except Exception as e:
+                continue
                 
         self.target_count = len(quant_pool)
         
