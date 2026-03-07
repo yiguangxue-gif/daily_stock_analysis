@@ -80,6 +80,7 @@ class ReboundScreener:
             df['close'] = pd.to_numeric(df['最新价'], errors='coerce').fillna(0)
             df['open'] = pd.to_numeric(df.get('今开', df['close']), errors='coerce').fillna(0)
             df['prev_close'] = pd.to_numeric(df.get('昨收', df['close']), errors='coerce').fillna(0)
+            # 兼容新浪无市值数据的情况
             df['market_cap'] = 0  
             df['circ_mv'] = 0  
             return df, "SinaFinance"
@@ -255,7 +256,7 @@ class ReboundScreener:
             })
             
         return {
-            "ai_reflection": "【AI分析模块暂时下线/未正常输出】以下标的为量化引擎层层过滤后，依据纯技术面法则（1亿成交/流通50-100亿/阳线防追高）强算所得，可信度极高。",
+            "ai_reflection": "【AI分析模块暂时下线/未正常输出】以下标的为量化引擎层层过滤后，依据纯技术面法则（1亿成交/阳线防追高/尾盘放量）强算所得，可信度极高。",
             "new_lesson_learned": "无",
             "macro_view": "按资金驱动流派物理执行。",
             "top_5": top_5
@@ -480,8 +481,9 @@ class ReboundScreener:
         # 涨幅锁定：1% ~ 5.5% (给点冗余余地)
         df = df[(df['pct_chg'] >= 1.0) & (df['pct_chg'] <= 5.5)]
         
-        # 流通市值锁定：30亿 ~ 150亿 (适当放宽容错)
-        df = df[(df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 150_0000_0000)]
+        # 流通市值锁定：30亿 ~ 150亿 
+        # ⚠️ 致命 Bug 修复：当切换到新浪接口时 circ_mv 为 0，此时必须放行，否则所有股票都被抹杀！
+        df = df[(df['circ_mv'] == 0) | ((df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 150_0000_0000))]
         
         # 极严苛：高开绝对不能超过 3.5% (防早盘骗炮)
         if 'open' in df.columns and 'prev_close' in df.columns:
@@ -489,8 +491,8 @@ class ReboundScreener:
             # 兼容有些接口昨收为0的情况
             df = df[(df['open_gap'] <= 3.5) | (df['prev_close'] == 0)]
         
-        # 经过这么一筛，全市场可能就剩下 50 - 150 只股票了，按成交额排个序
-        candidates = df.sort_values(by='amount', ascending=False)
+        # 按成交额排个序，取最活跃的前 200 个送入 K 线引擎
+        candidates = df.sort_values(by='amount', ascending=False).head(200)
         logger.info(f"👉 全市场初筛完成：锁定 {len(candidates)} 只黄金标的，启动【K线排雷与分时扫描】...")
 
         quant_pool = []
@@ -528,13 +530,12 @@ class ReboundScreener:
                 is_yang = close_p > open_p
                 
                 # 3. 绝对不能是长上影大阴线！
-                # 上影线长度不能超过实体部分的 1.5 倍，或者上影线绝对波动不到 1.5%
                 upper_shadow = high_p - close_p
                 body = close_p - open_p
                 no_long_upper = (upper_shadow <= body * 1.5) or (upper_shadow / close_p < 0.015)
                 
-                # 4. 趋势要向上：股价在5日线之上
-                trend_up = (close_p > ma5)
+                # 4. 趋势要向上：股价在5日线之上，且 5日线 > 10日线
+                trend_up = (close_p > ma5) and (ma5 > ma10)
                 
                 # 5. 防高位接力：最近20天涨幅不大(不超过25%)，且近3天内没有大涨停
                 ret_20 = float(last['Ret_20']) if not pd.isna(last['Ret_20']) else 0
