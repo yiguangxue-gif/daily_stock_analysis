@@ -524,6 +524,8 @@ class GeminiAnalyzer:
         personal_status_text = ""
         system_win_rate = 50.0
         system_odds = 1.0
+        # 这里提取出来的回测记录用于展示
+        evidence_impact_text = ""
         try:
             url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -574,6 +576,10 @@ class GeminiAnalyzer:
                     curr_p = float(curr_price)
                     ai_impact = ((curr_p - past_price) / past_price) * 100
                     status_judge = "❌ 导致亏损" if ai_impact < 0 else "✅ 成功获利"
+                    
+                    # 提取这句铁证，后续会在 JSON 处理时直接拍到报告上
+                    evidence_impact_text = f"上次记录价({past_date}): {past_price:.2f}元 ➔ 今日价: {curr_p:.2f}元 | 真实涨跌: **{ai_impact:.2f}%** ({status_judge})"
+                    context['_evidence_impact'] = evidence_impact_text
                     
                     personal_status_text += f"\n### ⚖️ 绩效审判庭与凯利风控 (实盘回测)\n* **上次分析时 ({past_date}) 股价**：{past_price:.2f}元\n* **当前最新股价**：{curr_p:.2f}元\n* **区间真实涨跌**：{ai_impact:.2f}% ({status_judge})\n"
                     personal_status_text += f"* **📈 系统全局胜率**: {system_win_rate:.1f}% | **平均盈亏比**: {system_odds:.2f}\n"
@@ -889,6 +895,11 @@ class GeminiAnalyzer:
             fin_audit = intel.get('financial_audit', '')
             
             flattened_points = ""
+            
+            # 【这里是打脸回测铁证的注入点】
+            evidence = context.get('_evidence_impact', '')
+            if evidence:
+                flattened_points += f" [打脸铁证]: {evidence}"
             
             def clean_text(t):
                 if _is_empty_or_na(t) or "..." in t: return ""
