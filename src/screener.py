@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (图文定制：尾盘稳健低吸不追高版)
+A股游资量化选股雷达 - AI 自进化闭环 (图文定制：尾盘异动防追高实战版)
 ===================================
 """
 
@@ -182,21 +182,52 @@ class ReboundScreener:
         # 核心防追高指标
         df['High_20'] = df['最高'].rolling(20).max()
         df['Low_60'] = df['最低'].rolling(60).min()
+        df['Ret_20'] = df['收盘'].pct_change(20) * 100
         
-        # VWAP 全天成交均价 (A股成交量单位是手, 需要*100)
+        # VWAP 全天成交均价
         df['VWAP'] = df['成交额'] / (df['成交量'] * 100 + 1)
         
-        # MACD
-        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
-        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp1 - exp2
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['Hist'] = df['MACD'] - df['Signal']
+        # 连板基因监控
+        df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
         
         return df
+
+    def _check_tail_volume(self, code):
+        """
+        🚀 5分钟级盘口显微镜：核查尾盘 14:30 - 15:00 是否有异动放量
+        """
+        try:
+            # 拉取5分钟级别K线数据
+            df_min = self._fetch_with_retry(ak.stock_zh_a_hist_min_em, retries=2, delay=1, symbol=code, period="5", adjust="qfq")
+            if df_min is None or df_min.empty: 
+                return False, 0
+                
+            # 过滤出今天的数据
+            last_time = str(df_min.iloc[-1]['时间'])
+            today_date = last_time.split(' ')[0]
+            df_today = df_min[df_min['时间'].astype(str).str.startswith(today_date)]
+            
+            # A股一天4小时=48根5分钟K线。太少说明停牌或异常
+            if len(df_today) < 10: 
+                return False, 0 
+                
+            # 尾盘 14:30 - 15:00 是最后 6 根 K 线
+            tail_vol = df_today['成交量'].tail(6).sum()
+            total_vol = df_today['成交量'].sum()
+            
+            if total_vol == 0: 
+                return False, 0
+                
+            # 正常均分的话 30分钟是全天的 1/8 = 12.5%。
+            # 设定尾盘放量标准：超过全天的 16% (具有显著的右侧介入特征)
+            ratio = tail_vol / total_vol
+            return ratio >= 0.16, ratio
+            
+        except Exception as e:
+            return False, 0
         
     def _generate_fallback_ai_data(self, candidates):
-        """💥 断网物理直出机制：当 AI API 彻底连不上时，伪造数据格式强行发件"""
+        """💥 断网物理直出机制"""
         top_5 = []
         for c in candidates[:5]:
             top_5.append({
@@ -204,14 +235,14 @@ class ReboundScreener:
                 "name": c['名称'],
                 "strategy": c['匹配策略'],
                 "current_price": c['现价'],
-                "reason": f"AI服务超时，系统按【{c['匹配策略']}】战法物理直出。今日涨跌: {c['今日涨幅']}",
+                "reason": f"AI服务超时，系统按【{c['匹配策略']}】战法物理直出。分时量占比: {c.get('量比', 'N/A')}",
                 "target_price": "盘中突破",
                 "stop_loss": "破位MA5离场"
             })
             
         return {
-            "ai_reflection": "【系统断网警报】⚠️ Google Gemini API 响应超时，AI 反思模块下线。以下股票为底层量化模型强制输出。",
-            "macro_view": "【系统断网警报】⚠️ 无法生成宏观解读，按纯技术面选股。",
+            "ai_reflection": "【系统断网警报】⚠️ Google API 响应超时，AI 反思模块下线。以下股票为底层高频量化模型强制输出。",
+            "macro_view": "【系统断网警报】按纯技术面执行尾盘抢筹。",
             "top_5": top_5
         }
 
@@ -223,24 +254,24 @@ class ReboundScreener:
 
         cand_text = ""
         for c in candidates:
-            cand_text += f"[{c['代码']}]{c['名称']} | {c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 量比:{c['量比']} | 成交额:{c['成交额']}\n"
+            cand_text += f"[{c['代码']}]{c['名称']} | {c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 尾盘量占比:{c['量比']} | 成交额:{c['成交额']}\n"
 
         prompt = f"""你是一位掌管着百亿资金的顶级 A股实战游资大鳄。
-我为你筛选出了以下备选股票池（已经过底层极其严格的【防追高低吸算法】过滤）。
-你需要结合【昨日实盘复盘记录】和【今日宏观头条】，挑选出最适合明日出手的 5 只金股！哪怕市场再差，你也必须选满 5 只！
+我为你筛选出了以下备选股票池（已经过底层极其严格的【尾盘量能抢跑算法】过滤，它们尾盘均出现主力资金介入）。
+你需要结合【昨日实盘复盘记录】和【今日宏观头条】，进行终极定夺！
 
 {review_summary}
 
 ### 🌍 今日大势：
 {macro_news}
 
-### 📊 防高位站岗备选池 (已排序)：
+### 📊 尾盘异动资金备选池 (已按放量强度排序)：
 {cand_text}
 
 ### 🎯 你的任务：
 1. 深刻反思昨天的盈亏原因。
 2. 结合宏观新闻定调明天是进攻还是防守。
-3. 从【备选股票池】中强制挑选出刚好 5 只稳健金股，少一只都不行！(代码和名称必须是列表里有的)
+3. 从【备选股票池】中挑选出 **2 到 5 只** 爆发潜力最强、最稳健的金股（宁缺毋滥）！(代码和名称必须是列表里有的，请依然放入 top_5 数组中返回)
 
 请严格输出以下 JSON 格式：
 ```json
@@ -253,7 +284,7 @@ class ReboundScreener:
             "name": "股票名称",
             "strategy": "原样保留上面的匹配策略名",
             "current_price": 当前价格,
-            "reason": "入选逻辑（结合低吸不追高的战法，说明为什么选它，50字左右）",
+            "reason": "入选逻辑（结合尾盘抢筹战法，说明为什么选它，50字左右）",
             "target_price": "预估短期目标位（具体数字）",
             "stop_loss": "建议防守止损位（具体数字）"
         }}
@@ -261,9 +292,6 @@ class ReboundScreener:
 }}
 ```
 """
-        # ==============================================================
-        # 🛡️ 绝对防弹的 API 调用包裹层，抓取所有 504 异常并直出数据
-        # ==============================================================
         try:
             import google.generativeai as genai
             import warnings
@@ -338,13 +366,13 @@ class ReboundScreener:
         top5_html = ""
         if ai_data and "top_5" in ai_data and len(ai_data["top_5"]) > 0:
             top5_html += f"""
-            <h3>🧠 A股实战游资大鳄全局反思 (防高位站岗体系)</h3>
+            <h3>🧠 A股实战游资大鳄全局反思 (尾盘稳健模型)</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
                 <p><b>🔄 闭环反思：</b>{ai_data.get('ai_reflection', '无')}</p>
                 <p><b>🌍 宏观定调：</b>{ai_data.get('macro_view', '无')}</p>
             </div>
             
-            <h3>🏆 今日 TOP 5 尾盘低吸金股 (自 {target_count} 只合规池精选)</h3>
+            <h3>🏆 今日精选 尾盘异动金股 (自 {target_count} 只合规池精选)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #1a2942; color: #ffffff;">
                     <th>代码</th><th>名称</th><th>命中量化战法</th><th>现价</th><th>操作防守位</th><th>系统买入逻辑</th>
@@ -368,17 +396,17 @@ class ReboundScreener:
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 尾盘防追高选股雷达 ({today_str})</h2>
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 尾盘抢筹选股雷达 ({today_str})</h2>
             {review_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由尾盘低吸模型 + 绝对防弹兜底机制生成，严格规避高位站岗风险。</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告严格遵循 1亿成交底线、1-5%中小阳线、非长上影及 14:30 分时放量铁律生成。</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【尾盘防站岗雷达】AI 闭环复盘与 TOP 5 金股 - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【尾盘防追高雷达】AI 闭环复盘与精选金股 - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "AI智能选股"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -400,30 +428,33 @@ class ReboundScreener:
     def run_screen(self):
         socket.setdefaulttimeout(10.0)
 
-        logger.info("========== 启动【A股尾盘低吸防追高】选股雷达 ==========")
+        logger.info("========== 启动【A股尾盘异动防追高】选股雷达 ==========")
         
         df, source = self.get_market_spot()
         if df.empty: return
             
         review_summary, review_records = self.process_review_and_history(df)
         
-        # 第一步：基础过滤 (剔除垃圾、低流动性)
+        # ========================================================
+        # 第一步：基础宽泛过滤 (全天有效)
+        # ========================================================
         df = df[~df['name'].str.contains('ST|退')]
         df = df[~df['code'].str.startswith(('8', '4', '68'))] 
         df = df[df['close'] >= 1.0] # 股价1元以上
-        # 按照指南：要求成交额大于5000万，我们这里稍微放宽点到4000万，留点余地
-        df = df[df['amount'] >= 40000000]
+        df = df[df['amount'] >= 100000000] # 当天成交额 >= 1亿 (严格遵守)
+        # 涨幅放宽一点到 0-6% 之间作为候选，精准策略在下面 K 线循环里卡死 +1% ~ +5%
+        df = df[(df['pct_chg'] >= 0.0) & (df['pct_chg'] <= 6.0)]
         
-        candidates = df.sort_values(by='amount', ascending=False).head(300)
-        logger.info(f"👉 初筛完成：锁定全市场 {len(candidates)} 只基础标的，即将启动【防站岗】强算...")
+        candidates = df.sort_values(by='amount', ascending=False).head(200)
+        logger.info(f"👉 初筛完成：锁定全市场 {len(candidates)} 只符合基础条件的标的，启动【K线排雷与分时扫描】...")
 
         quant_pool = []
         backup_pool = [] 
         total_c = len(candidates)
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
-            if i % 20 == 0:
-                logger.info(f"⏳ 强算雷达扫描中... 当前进度: {i} / {total_c} (正在扫描: {row['name']})")
+            if i % 10 == 0:
+                logger.info(f"⏳ 强算雷达扫描中... 进度: {i} / {total_c} (正在扫描: {row['name']})")
                 
             code = row['code']
             name = row['name']
@@ -433,78 +464,68 @@ class ReboundScreener:
                 
                 tech_df = self.calculate_technical_indicators(hist)
                 last = tech_df.iloc[-1]
-                prev = tech_df.iloc[-2]
                 
                 close_p = float(last['收盘'])
                 open_p = float(last['开盘'])
                 high_p = float(last['最高'])
                 low_p = float(last['最低'])
-                prev_close = float(prev['收盘'])
                 
                 ma5 = float(last['MA5'])
                 ma10 = float(last['MA10'])
-                ma20 = float(last['MA20'])
-                
-                vma5 = float(last['VMA5'])
-                vol = float(last['成交量'])
-                vwap = float(last['VWAP'])
-                high20 = float(last['High_20'])
-                low60 = float(last['Low_60'])
                 
                 # ========================================================
-                # 🎯 像素级复刻：尾盘防站岗低吸策略
+                # 第二步：K线形态与位置过滤 (纯技术面严卡)
                 # ========================================================
                 
-                # 【1. 收盘涨跌幅在 -2% 到 +5% 之间】(绝不打板追高)
-                is_pct_ok = -2.0 <= row['pct_chg'] <= 5.0
+                # 1. 价格要强不癫：涨幅 +1% ~ +5% 之间
+                is_pct_ok = 1.0 <= row['pct_chg'] <= 5.0
                 
-                # 【2. 全天均势偏强】(收盘价大于当日平均持仓成本)
-                is_vwap_ok = close_p > vwap
+                # 2. 中小阳线：收盘价 > 开盘价
+                is_yang = close_p > open_p
                 
-                # 【3. 均线趋势向上且不能乖离太多】
-                is_trend_ok = ma5 >= ma10  
-                is_bias_ok = abs(close_p - ma5) / ma5 < 0.03  # 偏离MA5不超过3%
+                # 3. 不能是长上影大阴线：上影线长度 <= 实体部分的 1.5 倍，或者上影线绝对波动不到 1.5%
+                upper_shadow = high_p - close_p
+                body = close_p - open_p
+                no_long_upper = (upper_shadow <= body * 1.5) or (upper_shadow / close_p < 0.015)
                 
-                # 【4. 位置不过高】(严防历史大顶)
-                # 距离近20日最高价有至少5%的回撤 (防追小顶)
-                is_pos_pullback = close_p <= high20 * 0.95
-                # 距离近60日最低价涨幅不超过30% (防追大顶)
-                is_pos_bottom = close_p <= low60 * 1.30
-                is_pos_ok = is_pos_pullback and is_pos_bottom
+                # 4. 趋势要向上：股价在5日线之上，且最好 5日线 > 10日线
+                trend_up = (close_p > ma5) and (ma5 > ma10)
                 
-                # 【5. K线形态正常】
-                # 相对最低价涨幅 >= 1% (有底盘承接)
-                is_kline_low = (close_p - low_p) / low_p >= 0.01 if low_p > 0 else False
-                # 相对最高价回落 <= 1% (没有恶劣的长上影线骗炮)
-                is_kline_high = (high_p - close_p) / close_p <= 0.012 # 放宽一点点到1.2%防止漏杀
-                # 没有大幅高开 (高开超过2%一律不要)
-                is_no_gap = open_p <= prev_close * 1.02
-                is_kline_ok = is_kline_low and is_kline_high and is_no_gap
+                # 5. 位置不要太高：最近20天涨幅不大(不超过25%)，且近3天内没有涨停(拒绝接力末端)
+                ret_20 = float(last['Ret_20']) if not pd.isna(last['Ret_20']) else 0
+                pos_ok = ret_20 < 25.0
+                limit_up_3d = tech_df['Is_Limit_Up'].tail(3).sum()
+                no_recent_limit = limit_up_3d == 0
+
+                is_kline_ok = is_pct_ok and is_yang and no_long_upper and trend_up and pos_ok and no_recent_limit
                 
-                # 【6. 尾盘量能温和】
-                vr = vol / vma5 if vma5 > 0 else 1.0
-                is_vol_ok = 1.0 < vr < 3.0 # 温和放量，绝不能缩量，也不要爆量出货
-                
+                # ========================================================
+                # 第三步：分时尾盘异动猎杀 (核心高频扫描)
+                # ========================================================
                 strategy_matched = None
+                tail_ratio_str = "N/A"
                 
-                # 终极大杀器合体
-                if is_pct_ok and is_vwap_ok and is_trend_ok and is_bias_ok and is_pos_ok and is_kline_ok and is_vol_ok:
-                    strategy_matched = "📍 尾盘稳健低吸 (安全区)"
+                if is_kline_ok:
+                    # 触发高频盘口引擎
+                    is_tail_vol, tail_ratio = self._check_tail_volume(code)
+                    if is_tail_vol:
+                        strategy_matched = "🔥 尾盘放量抢筹"
+                        tail_ratio_str = f"{tail_ratio*100:.1f}%"
                 
-                # 备用资金活口策略 (放宽位置要求，但严格限制 K 线形态和均价)
-                elif is_pct_ok and is_vwap_ok and is_trend_ok and is_no_gap and (0 <= row['pct_chg'] <= 4.0):
+                # 如果没有满足完美尾盘战法，但满足了基本的底部红盘，塞入备胎池
+                elif (0.5 <= row['pct_chg'] <= 4.0) and trend_up and no_recent_limit and is_yang and no_long_upper:
                     backup_pool.append({
                         "代码": code, "名称": name, "现价": close_p,
-                        "匹配策略": "🛡️ 蓄势待发底仓", "今日涨幅": f"{row['pct_chg']:.2f}%", 
-                        "量比": f"{vr:.2f}", "成交额": f"{row['amount']/100000000:.1f}亿"
+                        "匹配策略": "🛡️ 稳健底仓备选", "今日涨幅": f"{row['pct_chg']:.2f}%", 
+                        "量比": "温和", "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
 
-                # 记录符合策略的股票
+                # 记录核心策略的股票
                 if strategy_matched:
                     quant_pool.append({
                         "代码": code, "名称": name, "现价": close_p,
                         "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
-                        "量比": f"{vr:.2f}", "成交额": f"{row['amount']/100000000:.1f}亿"
+                        "量比": tail_ratio_str, "成交额": f"{row['amount']/100000000:.1f}亿"
                     })
                     
                 time.sleep(random.uniform(0.1, 0.2))
@@ -512,40 +533,31 @@ class ReboundScreener:
                 continue
                 
         # =========================================================
-        # 💣 物理级强制兜底机制：缺几只，补几只！
+        # 💣 兜底机制：缺几只，补几只！
         # =========================================================
-        if len(quant_pool) < 5:
-            needed = 5 - len(quant_pool)
+        # 按尾盘放量比例排序，把量最大的排前面
+        quant_pool = sorted(quant_pool, key=lambda x: float(str(x['量比']).replace('%', '')) if '%' in str(x['量比']) else 0, reverse=True)
+        
+        if len(quant_pool) < 2:
+            needed = 2 - len(quant_pool)
             existing_codes = {q['代码'] for q in quant_pool}
-            logger.warning(f"⚠️ 核心低吸策略仅选出 {len(quant_pool)} 只，触发物理级兜底补充 {needed} 只！")
+            logger.warning(f"⚠️ 核心尾盘战法极度严苛，仅选出 {len(quant_pool)} 只，触发兜底补充 {needed} 只稳健备胎！")
             
-            # 从兜底池(形态好但位置稍高的)按涨幅排序补充
+            # 从兜底池按涨幅排序补充
             backup_pool = sorted(backup_pool, key=lambda x: float(x['今日涨幅'].strip('%')), reverse=True)
             for r in backup_pool:
                 if r['代码'] not in existing_codes:
                     quant_pool.append(r)
                     existing_codes.add(r['代码'])
-                if len(quant_pool) >= 5: break
+                if len(quant_pool) >= 2: break
                 
-            # 如果极度冰点连备胎都不够，硬抓全市场大屁股
-            if len(quant_pool) < 5:
-                for _, r in candidates.sort_values(by='amount', ascending=False).iterrows():
-                    if r['code'] not in existing_codes:
-                        quant_pool.append({
-                            "代码": r['code'], "名称": r['name'], "现价": r['close'],
-                            "匹配策略": "🩸 极致冰点抱团", "今日涨幅": f"{r['pct_chg']:.2f}%", 
-                            "量比": "N/A", "成交额": f"{r['amount']/100000000:.1f}亿"
-                        })
-                        existing_codes.add(r['code'])
-                    if len(quant_pool) >= 5: break
-            
         self.target_count = len(quant_pool)
         
         ai_result = None
         if quant_pool:
             macro_news = self.fetch_macro_news()
-            # 排序传给AI，核心策略排在前面
-            sorted_pool = sorted(quant_pool, key=lambda x: ("底仓" not in x['匹配策略'] and "冰点" not in x['匹配策略']), reverse=True)[:30]
+            # AI 分析池控制在最多 10 只
+            sorted_pool = quant_pool[:10]
             ai_result = self.ai_select_top5(sorted_pool, macro_news, review_summary)
             if ai_result and "top_5" in ai_result:
                 self.save_todays_picks(ai_result["top_5"])
@@ -553,11 +565,11 @@ class ReboundScreener:
         self.send_email_report(ai_result, review_records, self.target_count)
         
         print("\n" + "="*80)
-        print(f"          🏆 A股【尾盘低吸防追高+兜底】成功捕获 {self.target_count} 只标的")
+        print(f"          🏆 A股【尾盘防追高量化扫单】成功捕获 {self.target_count} 只标的")
         print("="*80)
         if review_records: print(f"✅ 昨日实盘打脸核算完毕！")
         if ai_result and "top_5" in ai_result:
-            print(f"🌟 绝不空仓！避险最强阵容已生成！")
+            print(f"🌟 绝不空仓！避险与进攻最佳阵容已生成！")
             if self.config.email_sender:
                 print("📧 报告已发送至您的邮箱！")
         print("================================================================================")
