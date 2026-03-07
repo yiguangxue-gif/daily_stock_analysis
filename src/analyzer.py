@@ -338,23 +338,42 @@ class GeminiAnalyzer:
                     m_root = ET.fromstring(macro_res.read())
                     m_lines = [f"- 🔴宏观头条: {it.find('title').text}" for it in m_root.findall('.//item')[:4]]
                     if m_lines: macro_news_text = "\n".join(m_lines)
-            except: pass
+            except Exception as e: pass
 
             circuit_breaker_msg = "\n\n⚠️ 【总指挥强制指令】风控官已探明致命利空！一票否决任何技术面看多逻辑，强烈建议避险清仓！" if fatal_risk else ""
             combined_google_news = f"【情报官与风控官情报池】:\n{google_news_text}\n\n【全球宏观大局】:\n{macro_news_text}{circuit_breaker_msg}"
 
+            # 组装完整的提示词
             prompt = self._format_prompt(context, name, news_context, combined_google_news)
-            res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
             
+            # 提交给 AI 生成报告
+            res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
             result = self._parse_response(res_text, code, name, context)
             
             result.market_snapshot = self._build_market_snapshot(context)
             result.user_cost = context.get('user_cost')
             result.user_shares = context.get('user_shares')
             return result
+            
         except Exception as e:
             logger.error(f"分析异常: {e}")
-            return AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='未知(API报错)', operation_advice='观望', error_message=str(e))
+            
+            # 【终极保底防断网物理直出】
+            # 如果大模型 API 彻底被限流挂掉，直接组装一份底层物理引擎生成的数据发给用户！
+            fallback_summary = f"⚠️ **大模型 API 拒绝响应** (限额或超时: {str(e)[:80]})。AI 代理已全部下线，以下为底层量化引擎强算数据（物理直出）：\n\n"
+            fallback_summary += context.get('_last_personal', '') + "\n"
+            fallback_summary += context.get('_last_radar', '') + "\n"
+            fallback_summary += context.get('_last_news', '')
+            
+            result = AnalysisResult(
+                code=code, name=name, sentiment_score=50, trend_prediction='未知(API断联)', 
+                operation_advice='观望', decision_type='hold', confidence_level='低',
+                analysis_summary=fallback_summary, success=True, raw_response=fallback_summary
+            )
+            result.market_snapshot = self._build_market_snapshot(context)
+            result.user_cost = context.get('user_cost')
+            result.user_shares = context.get('user_shares')
+            return result
 
     def _safe_float(self, val: Any) -> Optional[float]:
         try: return float(str(val).replace(',', '').replace('%', '').strip())
@@ -600,6 +619,11 @@ class GeminiAnalyzer:
 * 🌊 **当前所处情绪周期**: {emotion_cycle}
 * 🌡️ **情绪温度计**: {greed_fear_idx}
 """
+        
+        # 保存到 context 以备发生断联时可以物理直出
+        context['_last_personal'] = personal_status_text
+        context['_last_radar'] = hardcore_radar_text
+        context['_last_news'] = google_news
 
         t_close = today.get('close', curr_price)
         t_open = today.get('open', context.get('computed_open', 'N/A'))
@@ -829,8 +853,8 @@ class GeminiAnalyzer:
                     ps['quant_position_sizing'] = "20% (防守位)"
 
             # =======================================================
-            # 🛡️ 终极强渲染补丁：将所有深层嵌套的牛逼逻辑，强行拍扁，
-            # 并入老旧模板必定会渲染的 key_points 字段中！
+            # 🛡️ 终极强渲染补丁：将所有深层嵌套的高级系统逻辑，
+            # 强行提取并入旧模板一定会展示的 analysis_summary 中！
             # =======================================================
             ai_real_op = bp.get('ai_real_operation', '')
             kelly_pos = ps.get('kelly_position_sizing', '')
@@ -839,24 +863,36 @@ class GeminiAnalyzer:
             bull_agent = debate.get('bull_agent', '')
             bear_agent = debate.get('bear_agent', '')
             fin_audit = intel.get('financial_audit', '')
-            macro_impact = intel.get('macro_impact', '')
             
-            # 使用换行符和加粗标签，让邮件里的 key_points 变成一个极具战斗力的面板
-            flattened_points = ""
+            flattened_points = "\n\n---\n### 🚀 量化核心战报 (多Agent联合作战)\n"
+            has_advanced_data = False
             
-            if not _is_empty_or_na(ai_real_op): flattened_points += f"<br>🤖 **【总指挥实盘】**：{ai_real_op}"
-            if not _is_empty_or_na(kelly_pos): flattened_points += f"<br>⚖️ **【凯利仓位】**：{kelly_pos}"
-            if not _is_empty_or_na(cond_script): flattened_points += f"<br>⚡ **【自动化挂单】**：{cond_script}"
-            if not _is_empty_or_na(cog_bias): flattened_points += f"<br>🧠 **【归因诊断】**：{cog_bias}"
-            if not _is_empty_or_na(bull_agent): flattened_points += f"<br>🐂 **【多头爆破手】**：{bull_agent}"
-            if not _is_empty_or_na(bear_agent): flattened_points += f"<br>🐻 **【空头狙击手】**：{bear_agent}"
-            if not _is_empty_or_na(fin_audit): flattened_points += f"<br>💣 **【Agent C 审计】**：{fin_audit}"
+            if not _is_empty_or_na(ai_real_op): 
+                flattened_points += f"\n🤖 **【总指挥实盘决策】**：{ai_real_op}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(kelly_pos): 
+                flattened_points += f"\n⚖️ **【凯利仓位建议】**：{kelly_pos}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(cond_script): 
+                flattened_points += f"\n⚡ **【量化条件单】**：{cond_script}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(cog_bias): 
+                flattened_points += f"\n🧠 **【诊断与避坑】**：{cog_bias}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(bull_agent): 
+                flattened_points += f"\n🐂 **【多头爆破手】**：{bull_agent}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(bear_agent): 
+                flattened_points += f"\n🐻 **【空头狙击手】**：{bear_agent}\n"
+                has_advanced_data = True
+            if not _is_empty_or_na(fin_audit): 
+                flattened_points += f"\n💣 **【风控官排雷】**：{fin_audit}\n"
+                has_advanced_data = True
             
-            original_kp = d.get('key_points', '')
-            if not _is_empty_or_na(original_kp):
-                flattened_points += f"<br>📌 **【核心看点】**：{original_kp}"
-                
-            d['key_points'] = flattened_points if flattened_points else "暂无特殊看点"
+            orig_summary = d.get('analysis_summary', '分析完成')
+            if has_advanced_data:
+                # 把所有高阶文本硬塞到核心结论里，老邮件绝对能打印！
+                d['analysis_summary'] = orig_summary + flattened_points
 
             fixed_json_str = json.dumps(d, ensure_ascii=False)
 
@@ -876,7 +912,7 @@ class GeminiAnalyzer:
                 decision_type=decision_type, confidence_level=d.get('confidence_level', '中'),
                 debate_process=debate, dashboard=d.get('dashboard'),
                 analysis_summary=d.get('analysis_summary', '完成'), 
-                key_points=d.get('key_points'), # <--- 这里已经被强行塞满了所有牛逼的高级数据
+                key_points=d.get('key_points', ''),
                 success=True, 
                 raw_response=fixed_json_str 
             )
