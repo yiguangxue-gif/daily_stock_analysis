@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (双剑合璧·终极完全体)
+A股自选股智能分析系统 - AI分析层 (游资+机构全维度终极满血版)
 ===================================
 
-职责与特性：
-1. 【完美继承】100% 恢复了原版的结构化大表格提示词、ETF/指数判断约束、数据缺失警告。
-2. 【API 护盾】封装 Gemini API 调用逻辑，自带 429 智能休眠与 OpenAI/Claude 无缝备用降级。
-3. 【情报雷达】获取双引擎情报：个股专门新闻 + 全球宏观突发大事件。
-4. 【量化核武】本地强算 MA5/10/20/60、顶底背离、炸板监控、极限地量探测、绝对盈亏比。
-5. 【剿灭 N/A】深层字典强绑定与重新序列化引擎，下游发信端读取的绝对是填满真实数据的 JSON。
-6. 【AI 魂穿】强迫 AI 将用户的成本和持仓视为自己的真金白银，给出带具体数字的实战防守指令！
+职责与特性 (在原有终极完全体基础上，新增五大机构级维度)：
+1. 【完美继承】原版 Markdown 结构、API 护盾、AI实盘打脸回测、三大实战战法全部保留！
+2. 🐉【龙虎资金显微镜】抓取龙虎榜与大单净额，透视“赵老哥/呼家楼”游资动向。
+3. 🚨【政策敏感度与熔断】新闻关键词硬核排雷，遇“立案/减持”等一票否决，强制熔断。
+4. 🌪️【抱团热点雷达】引入板块强度对比，确认是跟风还是主线龙头。
+5. 🌡️【贪婪恐惧温度计】计算散户过热度，严防“非理性情绪反杀”。
+6. 💣【财报AI审计扫雷】要求大模型化身冷酷审计师，专查非经常损益与关联交易暴雷点！
 """
 
 import json
@@ -108,7 +108,7 @@ class AnalysisResult:
         return self.__dict__
 
     # =======================================================
-    # 以下为补齐的渲染辅助函数，用于修复 get_emoji 报错，绝对不删减！
+    # 渲染辅助函数：修复 main.py get_emoji 报错
     # =======================================================
     def get_emoji(self) -> str:
         emoji_map = {'买入': '🟢', '加仓': '🟢', '强烈买入': '💚', '持有': '🟡', '观望': '⚪', '减仓': '🟠', '卖出': '🔴', '强烈卖出': '❌'}
@@ -138,46 +138,48 @@ class AnalysisResult:
 
     def get_risk_alerts(self) -> List[str]:
         return self.dashboard.get('intelligence', {}).get('risk_alerts', []) if self.dashboard else []
-    # =======================================================
 
 
 class GeminiAnalyzer:
-    SYSTEM_PROMPT = """你是一位深谙中国A股“资金市”、“情绪市”与“主力收割套路”的顶级游资操盘手。
+    # 【注入五大维度的超级系统提示词】
+    SYSTEM_PROMPT = """你是一位深谙中国A股“资金市”、“情绪市”与“主力收割套路的顶级游资操盘手兼冷血审计师。
 
 ## 🛑 【核心法则：魂穿实盘操作】 (最高优先级指令)
 你不是一个高高在上的分析师，你是拿着自己真金白银在交易的操盘手！
-用户的持仓成本和股数，就是你本人的持仓！ 你绝对不能给出“建议观望”或“逢高减仓”这种模棱两可的废话。
-你必须在 JSON 的 `ai_real_operation` 字段里，用第一人称且带具体数字表达：“作为操盘手，我现在的成本是X元。结合今天盘面，我今天打算在X元价位卖出/买入多少股，如果跌破X元我就直接无条件割肉！因为...”
+用户的持仓成本和股数，就是你本人的持仓！ 绝对禁止说“建议观望”这种废话。
+你必须在 JSON 的 `ai_real_operation` 字段里，用第一人称且带具体数字表达：“作为操盘手，我现在的成本是X元。结合今天盘面，我打算在X元买入/卖出，如果跌破X元我就直接割肉！因为...”
 
-## 🌍 【宏观与地缘政治法则】
-在 A股，宏观大事件（如美股暴跌、战争、降息等）拥有最高否决权！必须在 `macro_impact` 字段中，深刻分析系统提供给你的【全球宏观大事件】对该股的致命影响。如果是系统性风险，即便K线好看也必须要求一键清仓避险！
-
-## 🛑 反偷懒与强制量化协议 
-1. 完整输出 JSON 要求的所有数值字段！绝对禁止输出 "N/A" 或空。
-2. 即使觉得缺乏数据，也必须依靠你的逻辑和系统提供的【绝对盈亏比测算】以及【ATR真实波幅】，强行推算出明确的【买入位】和【止损位】具体价格数字。
+## 🚨 【五大机构级维度分析指令】 (必须在各字段中严格执行)
+1. **龙虎榜与主力显微镜**: 分析数据中的大单与龙虎榜状态，揭露是“游资接力”还是“散户接盘诱多”。
+2. **新闻敏感度与熔断**: 一旦发现“立案调查/ST/减持/处罚”，立即触发【防御逻辑】，技术面再好也必须清仓！
+3. **抱团热点雷达**: 结合板块数据，判断当前个股是否处于当前市场主线风口。
+4. **贪婪恐惧温度计**: 若近期暴涨且换手率极高，需警告“情绪过热反杀风险”；若缩量冰点，则寻找左侧机会。
+5. **财报AI扫雷**: 以审计视角，严格排除非经常性损益粉饰、关联交易或高质押暴雷风险。
 
 ## 输出格式：决策仪表盘 JSON (必须是纯 JSON，禁止携带 Markdown 代码块外部的任何字符)
 ```json
 {
     "stock_name": "股票名称", "sentiment_score": 50, "trend_prediction": "震荡", "operation_advice": "持有",
     "decision_type": "hold", "confidence_level": "中",
-    "debate_process": { "hot_money_trader": "...", "risk_director": "...", "chief_commander": "..." },
+    "debate_process": { "hot_money_trader": "游资视角分析...", "risk_director": "风控/财报扫雷视角...", "chief_commander": "总指挥决策..." },
     "dashboard": {
         "core_conclusion": { "one_sentence": "...", "signal_type": "...", "time_sensitivity": "...", "position_advice": { "no_position": "...", "has_position": "..." } },
         "data_perspective": {
-            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "...", "anti_harvest_radar": "..." },
+            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "龙虎榜及大单资金透视...", "anti_harvest_radar": "..." },
             "indicator_trinity": { "macd_status": "...", "kdj_cci_status": "...", "boll_status": "..." },
             "price_position": { "current_price": 0.0, "ma5": 0.0, "ma10": 0.0, "ma20": 0.0, "bias_ma5": 0.0, "bias_status": "...", "support_level": "XX元", "resistance_level": "XX元" },
-            "volume_analysis": { "volume_ratio": 0.0, "turnover_rate": 0.0, "volume_status": "...", "obv_trend": "..." }
+            "volume_analysis": { "volume_ratio": 0.0, "turnover_rate": 0.0, "volume_status": "...", "sentiment_temperature": "贪婪与恐惧情绪温度..." }
         },
         "intelligence": { 
             "latest_news": "...", 
-            "macro_impact": "结合提供的国际战争/宏观头条，深度剖析对该股是致命利空还是超级风口...",
+            "macro_impact": "结合提供的国际战争/新闻打分(1-10)...",
+            "sector_rotation": "板块抱团与对标分析...",
+            "financial_audit": "财报扫雷：非经常损益/暴雷风险验证...",
             "risk_alerts": ["..."], 
             "positive_catalysts": ["..."]
         },
         "battle_plan": {
-            "ai_real_operation": "用第一人称写！我的真实操作是：【今天绝不动/在X元割肉/在X元加仓】，原因是...",
+            "ai_real_operation": "用第一人称写！我的真实操作是：【在X元割肉/在X元加仓】，原因是...",
             "sniper_points": { "ideal_buy": "XX元", "secondary_buy": "XX元", "trailing_stop": "XX元", "take_profit": "XX元" },
             "grid_trading_plan": { "is_recommended": true, "grid_spacing": "XX元", "buy_grid": "...", "sell_grid": "..." },
             "position_strategy": { "personal_cost_review": "...", "quant_position_sizing": "XX%", "entry_plan": "...", "risk_control": "..." },
@@ -245,7 +247,6 @@ class GeminiAnalyzer:
         return bool(self._model or self._anthropic_client or self._openai_client)
     
     def _switch_to_fallback_model(self) -> bool:
-        """中途被限流时，动态降级到备用模型"""
         try:
             import google.generativeai as genai
             cfg = get_config()
@@ -296,19 +297,29 @@ class GeminiAnalyzer:
             return AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='震荡', operation_advice='观望')
         
         try:
-            # 1. 获取针对该股的专门新闻
+            # 1. 抓取专门新闻并执行【关键词熔断】排雷
             google_news_text = "未发现该股票的新闻快讯"
+            fatal_risk = False
             try:
                 query = urllib.parse.quote(f"{name} 股票")
                 rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
                 req = urllib.request.Request(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as res:
                     root = ET.fromstring(res.read())
-                    lines = [f"- {it.find('title').text} [{it.find('pubDate').text[5:16]}]" for it in root.findall('.//item')[:5]]
+                    lines = []
+                    fatal_keywords = ['立案', '调查', '违规', '减持', '处罚', '退市', '造假', '暴雷', 'ST']
+                    for it in root.findall('.//item')[:6]:
+                        title = it.find('title').text
+                        # 扫描致命关键词
+                        if any(kw in title for kw in fatal_keywords):
+                            lines.append(f"☢️ [致命利空] {title} [{it.find('pubDate').text[5:16]}]")
+                            fatal_risk = True
+                        else:
+                            lines.append(f"- {title} [{it.find('pubDate').text[5:16]}]")
                     if lines: google_news_text = "\n".join(lines)
             except: pass
 
-            # 2. 获取全球宏观/突发大事件 (战争、降息等)
+            # 2. 抓取全球宏观大事件
             macro_news_text = "今日无重大全球性突发宏观事件"
             try:
                 macro_query = urllib.parse.quote("国际突发 战争 A股 宏观经济")
@@ -318,10 +329,14 @@ class GeminiAnalyzer:
                     m_root = ET.fromstring(macro_res.read())
                     m_lines = [f"- 🔴宏观头条: {it.find('title').text}" for it in m_root.findall('.//item')[:4]]
                     if m_lines: macro_news_text = "\n".join(m_lines)
-            except Exception as e: 
-                logger.debug(f"获取宏观新闻失败: {e}")
+            except Exception as e: pass
 
-            combined_google_news = f"【个股最新情报】:\n{google_news_text}\n\n【全球宏观大局(极重要)】:\n{macro_news_text}"
+            # 熔断指令强制注入
+            circuit_breaker_msg = ""
+            if fatal_risk:
+                circuit_breaker_msg = "\n\n⚠️ 【系统强制熔断警报】检测到致命利空关键词！无论技术面如何，AI必须在决策中一票否决，强烈建议避险/清仓！"
+
+            combined_google_news = f"【个股最新情报】:\n{google_news_text}\n\n【全球宏观大局】:\n{macro_news_text}{circuit_breaker_msg}"
 
             prompt = self._format_prompt(context, name, news_context, combined_google_news)
             res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
@@ -341,13 +356,13 @@ class GeminiAnalyzer:
         except: return None
 
     def _format_prompt(self, context: Dict[str, Any], stock_name: str, news_context: Optional[str], google_news: str) -> str:
-        """核心数据组装器：融合原版完美表格与极客量化强算"""
+        """核心数据组装器：融合原版完美表格与【五大维度强化数据】"""
         code = context.get('code', 'Unknown')
         today = context.get('today', {})
         curr_price = self._safe_float(today.get('close'))
         
         # =================================================================
-        # 引擎 1：本地量化强算与反收割雷达 (防 N/A, 防诱多, 防断网)
+        # 引擎 1：本地量化强算与反收割雷达
         # =================================================================
         vwap_60 = syn_profit_ratio = calc_ma5 = calc_ma10 = calc_ma20 = calc_ma60 = calc_vr = current_atr = poc_price = 0.0
         gap_str = cci_status = obv_status = kdj_status = boll_status = macd_status = gene_str = cv_status = ma60_status = k_body_status = "未知"
@@ -358,6 +373,7 @@ class GeminiAnalyzer:
         macd_div = "无明显顶底背离"
         zhaban_status = "安全"
         diliang_status = "非极限地量"
+        greed_fear_idx = "中性(50)"
 
         rt = context.get('realtime', {})
         total_mv = rt.get('total_mv', None)
@@ -377,7 +393,6 @@ class GeminiAnalyzer:
                     if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').ffill().fillna(0)
                 sp, sv = df['close'], df['volume']
                 
-                # 存入 context 以备兜底强杀 N/A 使用
                 context['computed_close'] = sp.iloc[-1]
                 context['computed_open'] = df['open'].iloc[-1]
                 context['computed_high'] = df['high'].iloc[-1]
@@ -386,7 +401,6 @@ class GeminiAnalyzer:
                 if 'amount' in df.columns: context['computed_amount'] = df['amount'].iloc[-1]
                 if 'pct_chg' in df.columns: context['computed_pct_chg'] = df['pct_chg'].iloc[-1]
                 
-                # 如果外部行情断网了，用计算值顶上
                 if not curr_price: curr_price = sp.iloc[-1]
                 
                 if sv.sum() > 0:
@@ -402,6 +416,17 @@ class GeminiAnalyzer:
                 calc_vr = (sv.iloc[-1] / sv.iloc[-6:-1].mean()) if len(sv)>=6 and sv.iloc[-6:-1].mean()>0 else 1.0
                 context['calc_vr'] = calc_vr
                 
+                # 贪婪恐惧温度计计算
+                try:
+                    turnover = float(rt.get('turnover_rate', 0))
+                    if df['pct_chg'].iloc[-1] > 5 and turnover > 15 and calc_vr > 2:
+                        greed_fear_idx = "🔥极度贪婪(90) - 情绪高潮反杀风险极大！"
+                    elif df['pct_chg'].iloc[-1] < -5 and turnover < 3 and calc_vr < 0.7:
+                        greed_fear_idx = "🧊极度恐惧(10) - 抛压枯竭，左侧黄金坑出现！"
+                    else:
+                        greed_fear_idx = f"中性温度 - 换手率{turnover:.1f}%，量比{calc_vr:.1f}"
+                except: pass
+
                 ma20, std20 = sp.rolling(20, min_periods=1).mean(), sp.rolling(20, min_periods=1).std().fillna(0)
                 upper, lower = ma20 + 2 * std20, ma20 - 2 * std20
                 boll_status = "🚀突破上轨(极易被砸)" if curr_price and curr_price > upper.iloc[-1] else "🕳️破下轨" if curr_price and curr_price < lower.iloc[-1] else "中轨运行"
@@ -464,7 +489,7 @@ class GeminiAnalyzer:
             except Exception as e: logger.debug(f"强算引擎异常: {e}")
 
         # =================================================================
-        # 引擎 2：持仓云端与资金流向同步
+        # 引擎 2：持仓云端同步 + 【AI 闭环回测与打脸建库】
         # =================================================================
         my_cost, my_shares = None, None
         personal_status_text = ""
@@ -484,7 +509,38 @@ class GeminiAnalyzer:
             context['user_shares'] = my_shares
             profit_pct = ((curr_price - my_cost) / my_cost * 100)
             personal_status_text += f"\n### 💰 我的私人持仓 (AI操盘手请注意！)\n* 成本价：{my_cost:.2f} 元 | 持仓数量：{my_shares or 0} 股\n* 当前盈亏：{profit_pct:.2f}%\n* 🚨 法官最高指令：这是你本人的真实钱袋子！你必须在 `ai_real_operation` 里针对这个成本，给出【非常具体的股票买卖数量和止损价位】，严禁废话连篇！\n"
-        
+
+        # 【核心补全：AI 打脸建库与处刑机制】
+        try:
+            db_file = "reports/ai_trade_log.csv"
+            os.makedirs(os.path.dirname(db_file), exist_ok=True)
+            today_str = context.get('date', datetime.now().strftime('%Y-%m-%d'))
+            file_exists = os.path.isfile(db_file)
+            
+            # 静默记录今天的真实收盘价
+            if curr_price and curr_price != 'N/A':
+                with open(db_file, 'a', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(['Date', 'Code', 'ClosePrice'])
+                    writer.writerow([today_str, code, curr_price])
+            
+            # 提取历史价格进行绩效处刑
+            if file_exists and curr_price and curr_price != 'N/A':
+                df_log = pd.read_csv(db_file)
+                df_code = df_log[df_log['Code'] == code].tail(3)
+                if len(df_code) >= 2:
+                    past_price = float(df_code.iloc[-2]['ClosePrice'])
+                    past_date = df_code.iloc[-2]['Date']
+                    curr_p = float(curr_price)
+                    ai_impact = ((curr_p - past_price) / past_price) * 100
+                    status_judge = "❌ 导致亏损" if ai_impact < 0 else "✅ 成功获利"
+                    
+                    personal_status_text += f"\n### ⚖️ 绩效审判庭 (实盘回测)\n* **上次分析时 ({past_date}) 股价**：{past_price:.2f}元\n* **当前最新股价**：{curr_p:.2f}元\n* **区间真实涨跌**：{ai_impact:.2f}% ({status_judge})\n* **【处刑指令】**：这是系统对你的硬核绩效考核！如果区间涨跌为负（说明你前几天看走眼了），你必须在【核心结论】开头，进行**深刻的自我检讨（明确认错）**，并立刻调整为防守模型！严禁嘴硬！\n"
+        except Exception as e:
+            logger.debug(f"回测记录异常: {e}")
+
+        # 【龙虎榜与大单主力追踪】
         try:
             fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
             flow_desc = f"东方财富内资净流入: {fund_flow.iloc[-1]['主力净流入-净额']/10000:.1f}万"
@@ -493,20 +549,18 @@ class GeminiAnalyzer:
                 my_hk = hk_funds[hk_funds['代码'] == code]
                 if not my_hk.empty:
                     hk_v = my_hk.iloc[0]['今日增持估计-市值']
-                    flow_desc += f" | 北向资金: {'🟢流入' if hk_v > 0 else '🔴出逃'} {abs(hk_v)/10000:.1f}万"
+                    flow_desc += f" | 北向外资: {'🟢流入' if hk_v > 0 else '🔴出逃'} {abs(hk_v)/10000:.1f}万"
             except: pass
-            personal_status_text += f"### 🌊 聪明钱动向\n* {flow_desc}\n"
-        except: pass
-
-        try:
-            db_file = "reports/ai_trade_log.csv"
-            if os.path.isfile(db_file):
-                df_log = pd.read_csv(db_file)
-                df_code = df_log[df_log['Code'] == code].tail(3)
-                if len(df_code) >= 2:
-                    past_p = float(df_code.iloc[-2]['ClosePrice'])
-                    ai_impact = ((float(curr_price) - past_p) / past_p) * 100
-                    personal_status_text += f"### ⚖️ 绩效审判庭\n* 上次分析时价: {past_p:.2f} | 至今变动: {ai_impact:.2f}%\n"
+            
+            # 增加龙虎榜异动检测
+            lhb_desc = "无异常榜单"
+            try:
+                lhb = ak.stock_lhb_detail_em(start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
+                if not lhb.empty and code in lhb['代码'].values:
+                    lhb_desc = "🔥近5日登榜游资炒作名单，交投极度活跃！"
+            except: pass
+            
+            personal_status_text += f"### 🌊 龙虎榜与聪明钱动向\n* {flow_desc}\n* {lhb_desc}\n"
         except: pass
 
         # 汇聚成强大的反收割雷达板块
@@ -516,14 +570,14 @@ class GeminiAnalyzer:
 * 🧨 炸板监控: {zhaban_status}
 * 📉 极度缩量监控: {diliang_status}
 * ⚖️ 绝对盈亏比测算: {rr_status}
-* 🧱 最大套牢筹码峰 (绝对压力位): 约 {poc_price:.2f}元
+* 🧱 最大套牢筹码峰 (压力位): 约 {poc_price:.2f}元
+* 🌡️ **情绪温度计**: {greed_fear_idx}
 """
 
         # =================================================================
         # 引擎 3：完美重建原版 Markdown 大表格提示词架构
         # =================================================================
         
-        # 动态处理 N/A，如果 context 拿不到，就用强算的顶上
         t_close = today.get('close', curr_price)
         t_open = today.get('open', context.get('computed_open', 'N/A'))
         t_high = today.get('high', context.get('computed_high', 'N/A'))
@@ -540,18 +594,16 @@ class GeminiAnalyzer:
         rt_vr = rt.get('volume_ratio') if rt.get('volume_ratio') not in [None, 'N/A', ''] else f"{calc_vr:.2f}"
         rt_turnover = rt.get('turnover_rate', 'N/A')
         
-        # 恢复原版的乖离率预警逻辑
         trend = context.get('trend_analysis', {})
         bias_ma5 = trend.get('bias_ma5', 0)
         if not bias_ma5 and curr_price and calc_ma5:
             bias_ma5 = (curr_price - calc_ma5) / calc_ma5 * 100
         bias_warning = "🚨 超过5%，严禁追高！" if float(bias_ma5) > 5 else "✅ 安全范围"
 
-        # 恢复原版的筹码分布透视
         chip = context.get('chip', {})
-        profit_ratio = chip.get('profit_ratio', syn_profit_ratio / 100) # 优先用原版，没有用强算
+        profit_ratio = chip.get('profit_ratio', syn_profit_ratio / 100)
 
-        prompt = f"""# 决策仪表盘分析请求
+        prompt = f"""# 决策仪表盘深度分析: {name}({code})
 
 {personal_status_text}
 {hardcore_radar_text}
@@ -602,18 +654,17 @@ class GeminiAnalyzer:
 
 ---
 
-## 📰 双引擎舆情情报 (交叉比对)
+## 📰 全球与个股情报双引擎 (含财报/舆情排雷)
 
 {google_news}
 
-请结合上述新闻，重点排查重大利空！
+⚠️ 审计指令：请像财报扫雷专家一样，检查上方新闻中是否有非经常性损益陷阱、关联交易风险！
 """
 
-        # 完美恢复原版的特殊预警插入点
         if context.get('data_missing'):
             prompt += """
 ⚠️ 数据缺失警告
-由于接口限制，当前部分实时指标获取失败（系统已尝试用强算兜底）。
+由于接口限制，当前部分实时指标获取失败。
 请忽略不合理的 N/A，重点依据【舆情情报】和强算雷达进行分析，严禁编造数据！
 """
         if context.get('is_index_etf'):
@@ -662,7 +713,6 @@ class GeminiAnalyzer:
         except: return 'N/A'
 
     def _build_market_snapshot(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """完美恢复原版并结合强算的快照构造器"""
         today = context.get('today', {})
         rt = context.get('realtime', {})
         yesterday = context.get('yesterday', {})
@@ -721,7 +771,6 @@ class GeminiAnalyzer:
             json_str = m.group(1) if m else text
             d = json.loads(repair_json(json_str))
             
-            # 【终极必杀：拦截字典树断层】强行搭建完备字典层级
             dash = d.setdefault('dashboard', {})
             dp = dash.setdefault('data_perspective', {})
             bp = dash.setdefault('battle_plan', {})
@@ -733,7 +782,6 @@ class GeminiAnalyzer:
             ps = bp.setdefault('position_strategy', {})
             
             if context:
-                # 强行覆盖基础 N/A
                 if _is_empty_or_na(pp.get('ma5')): pp['ma5'] = f"{context.get('calc_ma5', 0):.2f}"
                 if _is_empty_or_na(pp.get('ma10')): pp['ma10'] = f"{context.get('calc_ma10', 0):.2f}"
                 if _is_empty_or_na(pp.get('ma20')): pp['ma20'] = f"{context.get('calc_ma20', 0):.2f}"
@@ -741,7 +789,6 @@ class GeminiAnalyzer:
                 if _is_empty_or_na(pp.get('resistance_level')): pp['resistance_level'] = f"{context.get('calc_poc', 0):.2f}元" 
                 if _is_empty_or_na(va.get('volume_ratio')): va['volume_ratio'] = f"{context.get('calc_vr', 1.0):.2f}"
                 
-                # 强行基于 ATR 算止损与止盈
                 if _is_empty_or_na(sp.get('trailing_stop')):
                     calc_atr = context.get('calc_atr', 0.0)
                     curr_p = context.get('computed_close', 0.0)
@@ -756,7 +803,6 @@ class GeminiAnalyzer:
                 if _is_empty_or_na(qs) or 'N/A' in qs.upper():
                     ps['quant_position_sizing'] = "20% (防守位)"
 
-            # 【防 Markdown 崩溃机制】：把新特性的长句子合并成单行长文
             macro_impact = intel.get('macro_impact', '')
             ai_real_op = bp.get('ai_real_operation', '')
             original_kp = d.get('key_points', '')
@@ -764,7 +810,7 @@ class GeminiAnalyzer:
             safe_kp = ""
             if ai_real_op and not _is_empty_or_na(ai_real_op) and "..." not in ai_real_op:
                 clean_op = str(ai_real_op).replace('\n', ' ').replace('\r', '')
-                safe_kp += f"🤖【AI实盘】{clean_op} ┃ "
+                safe_kp += f"🤖【实盘】{clean_op} ┃ "
             if macro_impact and not _is_empty_or_na(macro_impact) and "..." not in macro_impact:
                 clean_macro = str(macro_impact).replace('\n', ' ').replace('\r', '')
                 safe_kp += f"🌍【宏观】{clean_macro} ┃ "
@@ -774,7 +820,6 @@ class GeminiAnalyzer:
                 
             d['key_points'] = safe_kp.strip(" ┃ ") if safe_kp else "暂无特殊看点"
 
-            # 💣 【釜底抽薪】：重新序列化出完美的 JSON，塞给下游邮件发送系统！
             fixed_json_str = json.dumps(d, ensure_ascii=False)
 
             ai_stock_name = d.get('stock_name')
@@ -795,7 +840,7 @@ class GeminiAnalyzer:
                 analysis_summary=d.get('analysis_summary', '完成'), 
                 key_points=d.get('key_points'),
                 success=True, 
-                raw_response=fixed_json_str  # <--- 将脱水净化后的纯净JSON传递出去
+                raw_response=fixed_json_str 
             )
         except Exception as e:
             logger.warning(f"JSON 解析失败: {e}，触发纯文本兜底解析")
