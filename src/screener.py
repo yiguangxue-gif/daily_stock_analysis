@@ -220,13 +220,6 @@ class ReboundScreener:
         # 连板基因监控
         df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
         
-        # MACD
-        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
-        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp1 - exp2
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['Hist'] = df['MACD'] - df['Signal']
-        
         return df
 
     def _check_tail_volume(self, code):
@@ -253,8 +246,8 @@ class ReboundScreener:
                 return False, 0
                 
             ratio = tail_vol / total_vol
-            # 💡 铁律：尾盘30分成交需占全天 20% 以上，证明有资金扫货
-            return ratio >= 0.20, ratio
+            # 💡 铁律调整：正常30分钟是12.5%，只要尾盘占比 >= 15% 即可视为抢筹（太苛刻会漏杀）
+            return ratio >= 0.15, ratio
             
         except Exception as e:
             return False, 0
@@ -291,7 +284,7 @@ class ReboundScreener:
             cand_text += f"[{c['代码']}]{c['名称']} | {c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 尾盘量占比:{c['量比']} | 成交额:{c['成交额']}\n"
 
         prompt = f"""你是一位专注于【A股超短线隔夜套利】的顶级游资操盘手。
-我为你筛选出了以下备选股票池，它们全部满足：“前期跌透、近3日企稳不破新低、尾盘放量抢筹、非长上影阳线”的极品潜伏特征！
+我为你筛选出了以下备选股票池，它们全部满足：“前期回调、近3日企稳不破新低、无长上影阳线”的极品潜伏特征！
 
 ### 🧠 你的长期进化记忆 (AI避坑黑名单库)：
 {past_lessons}
@@ -322,7 +315,7 @@ class ReboundScreener:
             "name": "股票名称",
             "strategy": "原样保留上面的匹配策略名",
             "current_price": 当前价格,
-            "reason": "入选逻辑（围绕跌透企稳和尾盘放量展开，50字左右）",
+            "reason": "入选逻辑（围绕跌透企稳和尾盘特征展开，50字左右）",
             "target_price": "明日冲高预估卖点（具体数字）",
             "stop_loss": "极简止损位（如破5日线或近3日低点）"
         }}
@@ -443,7 +436,7 @@ class ReboundScreener:
             {review_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告严格遵循“前期回调8-20% + 近3日不破新低 + 14:30爆量抢筹”左侧试错战法生成。</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告严格遵循“前期回调5-30% + 近3日企稳 + 温和放量不追高”左侧试错战法生成。</p>
         </body>
         </html>
         """
@@ -498,7 +491,7 @@ class ReboundScreener:
         total_c = len(candidates)
         
         # ========================================================
-        # 第二步：对K线形态、回调深度、MACD进行像素级排查
+        # 第二步：对K线形态、回调深度、放量情况进行排查 (大幅放宽容错度防全军覆没)
         # ========================================================
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
             if i % 20 == 0:
@@ -525,66 +518,59 @@ class ReboundScreener:
                 vol = float(last['成交量'])
                 
                 # ----------------------------------------------------
-                # 🛡️ 铁律 1: 确实“跌了一段时间” (近15天高点到近5天低点，跌幅在 8%~25% 之间)
+                # 🛡️ 铁律 1: 跌透要求 (放宽为近15天跌幅 5%~30%)
                 # ----------------------------------------------------
                 high_15 = tech_df['最高'].iloc[-15:-3].max()
                 low_5 = tech_df['最低'].iloc[-5:].min()
                 drop_pct = (high_15 - low_5) / high_15 * 100 if high_15 > 0 else 0
-                is_dropped = 8.0 <= drop_pct <= 25.0
+                is_dropped = 5.0 <= drop_pct <= 30.0
                 
                 # ----------------------------------------------------
-                # 🛡️ 铁律 2: 已经“企稳”而非还在砸 (最近3天不再创新低，且振幅小)
+                # 🛡️ 铁律 2: 企稳状态 (底部没大幅下移，振幅不过分大)
                 # ----------------------------------------------------
                 low_15_all = tech_df['最低'].iloc[-15:].min()
-                is_stabilized = tech_df['最低'].iloc[-3:].min() >= low_15_all # 底部没下移
+                is_stabilized = tech_df['最低'].iloc[-3:].min() >= low_15_all * 0.98 # 允许有2%的下探容错
                 
-                # 振幅 <= 4.5% (小阳/小阴/十字星)
                 amp_3d_max = tech_df['振幅'].iloc[-3:].max()
-                is_small_amp = amp_3d_max <= 4.5
+                is_small_amp = amp_3d_max <= 5.5 # 振幅放宽到5.5%
                 
                 # 股价贴近或站上 5 日线
-                is_on_ma = close_p >= ma5 * 0.985
+                is_on_ma = close_p >= ma5 * 0.98
                 
                 # ----------------------------------------------------
-                # 🛡️ 铁律 3: “温和放量”而非暴量出货
+                # 🛡️ 铁律 3: 温和放量与健康换手
                 # ----------------------------------------------------
                 vol_3d_mean = tech_df['成交量'].iloc[-3:].mean()
                 vol_base_mean = tech_df['成交量'].iloc[-15:-3].mean()
                 vol_ratio_period = vol_3d_mean / vol_base_mean if vol_base_mean > 0 else 1.0
                 
-                # 是前期的 1.1 ~ 2.5 倍
-                is_mild_vol = 1.1 <= vol_ratio_period <= 2.5
-                # 今天不是最近20天的天量
+                # 均量倍数放宽到 0.9 ~ 3.0 倍
+                is_mild_vol = 0.9 <= vol_ratio_period <= 3.0
                 not_max_vol = vol < tech_df['成交量'].iloc[-20:-1].max()
-                # 换手率健康 (3%-10%)，为了防漏杀放宽至 2.5%~12%
-                is_turnover_ok = 2.5 <= turnover <= 12.0
+                # 换手率放宽
+                is_turnover_ok = 1.5 <= turnover <= 15.0
                 
                 # ----------------------------------------------------
-                # 🛡️ 铁律 4: K线与MACD微观形态
+                # 🛡️ 铁律 4: K线形态
                 # ----------------------------------------------------
-                # 必须是实体阳线或假阴真阳
                 is_yang = close_p > open_p
-                # 拒绝长上影线 (上影线不能大于实体1.5倍)
                 upper_shadow = high_p - close_p
                 body = close_p - open_p
-                no_long_upper = (upper_shadow <= body * 1.5) or (upper_shadow / close_p < 0.015)
+                # 上影线不能太长
+                no_long_upper = (upper_shadow <= body * 2.0) or (upper_shadow / close_p < 0.02)
                 
-                # MACD 绿柱缩短或DIF抬头
-                macd_ok = (last['Hist'] >= prev['Hist']) and (last['MACD'] >= prev['MACD'])
-
                 # ========================================================
                 # ⚔️ 综合判决与分时狙击
                 # ========================================================
-                core_match = is_dropped and is_stabilized and is_small_amp and is_on_ma and is_mild_vol and not_max_vol and is_turnover_ok and is_yang and no_long_upper and macd_ok
+                # 去掉了MACD束缚，提高命中率
+                core_match = is_dropped and is_stabilized and is_small_amp and is_on_ma and is_mild_vol and not_max_vol and is_turnover_ok and is_yang and no_long_upper
                 
-                # 备胎条件：如果核心没选出来，只要跌过、企稳且今天红盘无上影，就放入备胎池
-                backup_match = (5.0 <= drop_pct <= 30.0) and is_stabilized and is_on_ma and is_yang and no_long_upper and (vol_ratio_period >= 0.9)
+                backup_match = (4.0 <= drop_pct <= 35.0) and is_stabilized and is_on_ma and is_yang and no_long_upper and (vol_ratio_period >= 0.8)
                 
                 strategy_matched = None
                 tail_ratio_str = "N/A"
                 
                 if core_match or backup_match:
-                    # 触发高频盘口引擎
                     is_tail_vol, tail_ratio = self._check_tail_volume(code)
                     
                     if is_tail_vol and core_match:
@@ -595,8 +581,8 @@ class ReboundScreener:
                             "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
                             "量比": tail_ratio_str, "成交额": f"{row['amount']/100000000:.1f}亿"
                         })
-                    elif tail_ratio >= 0.15 and backup_match:
-                        strategy_matched = "🛡️ 右侧试错+尾盘异动"
+                    elif tail_ratio >= 0.125 and backup_match: # 只要大于平均水平即可算备用
+                        strategy_matched = "🛡️ 底部右侧+尾盘异动"
                         tail_ratio_str = f"{tail_ratio*100:.1f}%"
                         backup_pool.append({
                             "代码": code, "名称": name, "现价": close_p,
@@ -609,15 +595,15 @@ class ReboundScreener:
                 continue
                 
         # =========================================================
-        # 💣 宁缺毋滥的兜底机制
+        # 💣 绝对防御兜底机制 (防止空包弹)
         # =========================================================
         quant_pool = sorted(quant_pool, key=lambda x: float(str(x['量比']).replace('%', '')) if '%' in str(x['量比']) else 0, reverse=True)
         
-        # 只要能选出2只以上完美的，就不兜底。如果不到2只，从备胎里拿。
         if len(quant_pool) < 2:
-            needed = 3 - len(quant_pool)  # 至少凑3只看看
+            needed = 3 - len(quant_pool)
             existing_codes = {q['代码'] for q in quant_pool}
             
+            # 第一层兜底：从形态接近的备胎池抓
             backup_pool = sorted(backup_pool, key=lambda x: float(str(x['量比']).replace('%', '')) if '%' in str(x['量比']) else 0, reverse=True)
             for r in backup_pool:
                 if r['代码'] not in existing_codes:
@@ -625,12 +611,24 @@ class ReboundScreener:
                     existing_codes.add(r['代码'])
                 if len(quant_pool) >= 3: break
                 
+            # 第二层终极兜底：如果行情极端，连备胎都没有，强行抓取当日红盘的最活跃大屁股！
+            if len(quant_pool) < 2:
+                logger.warning(f"⚠️ 核心与备用条件双双落空，启动【绝对防御兜底】，强行抓取当日红盘活跃股...")
+                for _, r in candidates.iterrows():
+                    if r['code'] not in existing_codes and r['pct_chg'] > 0:
+                        quant_pool.append({
+                            "代码": r['code'], "名称": r['name'], "现价": r['close'],
+                            "匹配策略": "🩸 活跃底仓防守", "今日涨幅": f"{r['pct_chg']:.2f}%", 
+                            "量比": "N/A", "成交额": f"{r['amount']/100000000:.1f}亿"
+                        })
+                        existing_codes.add(r['code'])
+                    if len(quant_pool) >= 3: break
+                
         self.target_count = len(quant_pool)
         
         ai_result = None
         if quant_pool:
             macro_news = self.fetch_macro_news()
-            # 严格按照“选出5只左右”的要求
             sorted_pool = quant_pool[:5]
             ai_result = self.ai_select_top5(sorted_pool, macro_news, review_summary)
             
