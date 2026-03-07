@@ -727,7 +727,7 @@ class GeminiAnalyzer:
 ## ✅ 最终输出任务
 
 请输出完整的 JSON 格式决策仪表盘。
-务必生成具体的【条件单交易脚本】及基于历史胜率的【凯利仓位测算】！绝对禁止在 JSON 的数值字段输出 "N/A"。"""
+务必生成具体的【条件单交易脚本】及基于历史胜率的【凯利仓位测算】！绝对禁止在 JSON 的数值字段输出 "N/A" 或空值，如果缺少数据，请你依据常识或上下文预估一个安全的数值。"""
 
         return prompt
 
@@ -846,7 +846,7 @@ class GeminiAnalyzer:
             ps = bp.get('position_strategy'); 
             if not isinstance(ps, dict): ps = {}; bp['position_strategy'] = ps
             
-            # 【修复 N/A】强行用底层算力兜底
+            # 【终极 N/A 清除与强算兜底】
             if context:
                 if _is_empty_or_na(pp.get('ma5')): pp['ma5'] = f"{context.get('calc_ma5', 0):.2f}"
                 if _is_empty_or_na(pp.get('ma10')): pp['ma10'] = f"{context.get('calc_ma10', 0):.2f}"
@@ -865,9 +865,20 @@ class GeminiAnalyzer:
                 if _is_empty_or_na(sp.get('take_profit')):
                     calc_poc = context.get('calc_poc', 0.0)
                     sp['take_profit'] = f"{calc_poc:.2f}元" if calc_poc > 0 else "逢高止盈"
+                    
+                if _is_empty_or_na(sp.get('ideal_buy')):
+                    sp['ideal_buy'] = f"{context.get('computed_close', 0.0):.2f}元"
+                    
+                if _is_empty_or_na(sp.get('secondary_buy')):
+                    sp['secondary_buy'] = f"{context.get('calc_ma10', 0.0):.2f}元"
+
+                qs = str(ps.get('quant_position_sizing', ''))
+                if _is_empty_or_na(qs):
+                    ps['quant_position_sizing'] = "20% (防守位)"
 
             # =======================================================
-            # 🛡️ 降维寄生补丁：把高级数据合并至必定会显示的旧字段中！
+            # 🛡️ 降维寄生补丁：把高级数据合并至必定会显示的【核心结论】中！
+            # 并且绝对不使用导致截断的 Markdown 加粗格式 (如 **)
             # =======================================================
             ai_real_op = bp.get('ai_real_operation', '')
             kelly_pos = ps.get('kelly_position_sizing', '')
@@ -876,41 +887,43 @@ class GeminiAnalyzer:
             bull_agent = debate.get('bull_agent', '')
             bear_agent = debate.get('bear_agent', '')
             fin_audit = intel.get('financial_audit', '')
-            macro_impact = intel.get('macro_impact', '')
+            
+            flattened_points = ""
+            
+            def clean_text(t):
+                if _is_empty_or_na(t) or "..." in t: return ""
+                return str(t).replace('\n', ' ').replace('\r', '').replace('**', '').replace('*', '')
 
-            # 1. 强行修正老模板能读到的 quant_position_sizing
-            if not _is_empty_or_na(kelly_pos):
-                ps['quant_position_sizing'] = kelly_pos
-            elif _is_empty_or_na(ps.get('quant_position_sizing')):
-                ps['quant_position_sizing'] = "20% (防守位)"
+            op_cl = clean_text(ai_real_op)
+            if op_cl: flattened_points += f" [总指挥决策]: {op_cl}"
+            
+            kelly_cl = clean_text(kelly_pos)
+            if kelly_cl: flattened_points += f" [凯利仓位]: {kelly_cl}"
+            
+            cond_cl = clean_text(cond_script)
+            if cond_cl: flattened_points += f" [挂单脚本]: {cond_cl}"
+            
+            bias_cl = clean_text(cog_bias)
+            if bias_cl: flattened_points += f" [归因诊断]: {bias_cl}"
+            
+            bull_cl = clean_text(bull_agent)
+            if bull_cl: flattened_points += f" [多头意见]: {bull_cl}"
+            
+            bear_cl = clean_text(bear_agent)
+            if bear_cl: flattened_points += f" [空头意见]: {bear_cl}"
+            
+            fin_cl = clean_text(fin_audit)
+            if fin_cl: flattened_points += f" [风控审计]: {fin_cl}"
 
-            # 2. 寄生于 entry_plan (建仓策略)
-            extra_entry = ""
-            if not _is_empty_or_na(ai_real_op): extra_entry += f"\n\n**🤖【总指挥实盘下注】**: {ai_real_op}"
-            if not _is_empty_or_na(cond_script): extra_entry += f"\n\n**⚡【量化条件单】**: {cond_script}"
-            if extra_entry:
-                bp['entry_plan'] = str(bp.get('entry_plan', '')) + extra_entry
+            # 把大段文字直接拼在一句话决策里
+            if flattened_points:
+                cc = dash.setdefault('core_conclusion', {})
+                old_one_sentence = cc.get('one_sentence', '')
+                cc['one_sentence'] = old_one_sentence + "\n\n🤖 联合战报 ➔" + flattened_points
 
-            # 3. 寄生于 risk_control (风控策略)
-            extra_risk = ""
-            if not _is_empty_or_na(cog_bias): extra_risk += f"\n\n**🧠【打脸归因反思】**: {cog_bias}"
-            if not _is_empty_or_na(fin_audit): extra_risk += f"\n\n**💣【AgentC 财报扫雷】**: {fin_audit}"
-            if extra_risk:
-                bp['risk_control'] = str(bp.get('risk_control', '')) + extra_risk
+            # 清空导致崩溃的 key_points
+            d['key_points'] = ""
 
-            # 4. 寄生于 latest_news (最新动态)
-            extra_news = ""
-            if not _is_empty_or_na(macro_impact): extra_news += f"\n\n**🌍【宏观流动性】**: {macro_impact}"
-            if not _is_empty_or_na(bull_agent): extra_news += f"\n\n**🐂【多头爆破手】**: {bull_agent}"
-            if not _is_empty_or_na(bear_agent): extra_news += f"\n\n**🐻【空头狙击手】**: {bear_agent}"
-            if extra_news:
-                intel['latest_news'] = str(intel.get('latest_news', '')) + extra_news
-
-            # 5. 抹杀 key_points 的回车符，防止 Markdown 的加粗（**）被截断
-            kp = str(d.get('key_points', '无特殊看点'))
-            d['key_points'] = kp.replace('\n', ' ').replace('\r', '') if kp else "无"
-
-            # 安全重新序列化
             fixed_json_str = json.dumps(d, ensure_ascii=False)
 
             ai_stock_name = d.get('stock_name')
@@ -927,9 +940,9 @@ class GeminiAnalyzer:
                 code=code, name=name, sentiment_score=int(d.get('sentiment_score', 50)),
                 trend_prediction=d.get('trend_prediction', '震荡'), operation_advice=d.get('operation_advice', '持有'),
                 decision_type=decision_type, confidence_level=d.get('confidence_level', '中'),
-                debate_process=debate, dashboard=d.get('dashboard'),
+                debate_process=debate, dashboard=dash,
                 analysis_summary=d.get('analysis_summary', '完成'), 
-                key_points=d.get('key_points', ''),
+                key_points="",
                 success=True, 
                 raw_response=fixed_json_str 
             )
