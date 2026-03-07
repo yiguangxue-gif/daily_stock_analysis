@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (防卡死熔断 + 积分淘汰制)
+A股游资量化选股雷达 - AI 自进化闭环 (防卡死熔断 + 积分淘汰制 + 绝对不空包版)
 ===================================
 
 核心重构：
-1. 【反反爬虫熔断】：连续3次请求超时直接熔断，带着现有数据强行生成报告，绝不卡死！
-2. 【极速扫描】：将扫描池从200只缩减为成交额前100的绝对核心龙头，提升速度，降低封IP概率。
-3. 【积分淘汰制】：多维打分，按总分排序，强制提取前 5 名最强标的，保证每日必有产出。
+1. 【修复 K线数学Bug】：严格使用绝对值计算实体和上影线，杜绝阴线被误判为长上影线直接扣100分的问题。
+2. 【上帝级物理兜底】：如果积分系统全军覆没或API被彻底封死，强行从初筛快照中抓取5只最活跃的标的，永远告别“捕获 0 只”！
+3. 【反反爬虫熔断】：连续3次请求超时直接跳出，带着现有数据强行生成报告。
 """
 
 import akshare as ak
@@ -270,17 +270,17 @@ class ReboundScreener:
             top_5.append({
                 "code": c['代码'],
                 "name": c['名称'],
-                "strategy": c['匹配策略'],
+                "strategy": c.get('匹配策略', '🛡️ 系统防守直出'),
                 "current_price": c['现价'],
-                "reason": f"系统物理防线生成。综合得分: {c.get('综合得分', 'N/A')}，尾盘资金: {c.get('量比', 'N/A')}。",
-                "target_price": "次日盘中冲高即走",
+                "reason": f"系统物理防线生成。综合得分: {c.get('综合得分', 'N/A')}，尾盘状态: {c.get('量比', 'N/A')}。",
+                "target_price": "次日盘中冲高溢价",
                 "stop_loss": "破位昨日低点"
             })
             
         return {
-            "ai_reflection": "【系统防空包弹预警】AI 模块响应受限。以下标的为底层量化积分引擎根据【防追高+尾盘异动】强制输出，请控制仓位。",
+            "ai_reflection": "【系统防空包弹预警】AI 模块响应受限。以下标的为底层量化积分引擎强制输出的套利标的。",
             "new_lesson_learned": "无",
-            "macro_view": "按左侧资金驱动流派执行尾盘拿货、明早兑现。",
+            "macro_view": "按资金驱动流派执行尾盘拿货、明早兑现。",
             "top_5": top_5
         }
 
@@ -419,7 +419,7 @@ class ReboundScreener:
                 <p><b>🌍 明早兑现环境：</b>{ai_data.get('macro_view', '无')}</p>
             </div>
             
-            <h3>🏆 今日极品尾盘套利标的 (综合得分入选：共 {target_count} 只)</h3>
+            <h3>🏆 今日极品尾盘套利标的 (按得分入选：共 {target_count} 只)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #1a2942; color: #ffffff;">
                     <th>代码</th><th>名称</th><th>量化策略标识</th><th>现价</th><th>明日早盘剧本</th><th>套利逻辑</th>
@@ -537,13 +537,15 @@ class ReboundScreener:
                 if is_yang:
                     score += 15
                     
-                upper_shadow = high_p - close_p
-                body = close_p - open_p
-                # 如果上影线太长，一票否决(扣100分)
-                if body > 0 and upper_shadow > body * 1.5:
+                # 🚀 修复核心：计算实体和上影线必须用绝对值和最大值！
+                body = abs(close_p - open_p)
+                upper_shadow = high_p - max(close_p, open_p)
+                
+                # 上影线太长（实体1.5倍以上且绝对幅度>1%），一票否决
+                if body > 0 and upper_shadow > body * 1.5 and (upper_shadow / close_p > 0.01):
                     score -= 100
-                else:
-                    score += 15
+                elif upper_shadow < body * 0.5:
+                    score += 15 # 光头或短上影加分
                     
                 # ----------------------------------------------------
                 # 维次 2：涨幅位置 (满分 20 分)
@@ -576,7 +578,7 @@ class ReboundScreener:
                 # 维次 5：分时尾盘异动 (满分 30 分)
                 # ========================================================
                 tail_ratio_str = "N/A"
-                if score >= 40: 
+                if score >= 20: # 只要基础面没被扣穿(>20分)，才去查高频分时图，省点请求
                     is_tail_vol, tail_ratio, tail_desc = self._check_tail_volume(code)
                     tail_ratio_str = tail_desc
                     
@@ -589,8 +591,8 @@ class ReboundScreener:
                     else:
                         strategy_matched = "🩸 活跃底仓防守"
                         
-                # 记录及格的股票 (允许低至 40 分的股票进入海选池，保障绝不空仓)
-                if score >= 40:
+                # 记录及格的股票 (允许低至 20 分的股票进入海选池，保障绝不空仓)
+                if score >= 20:
                     scored_pool.append({
                         "代码": code, "名称": name, "现价": close_p,
                         "匹配策略": strategy_matched, "今日涨幅": f"{row['pct_chg']:.2f}%", 
@@ -612,11 +614,23 @@ class ReboundScreener:
         # =========================================================
         # 👑 胜者为王：强制截取前 5 名 (绝不空仓！)
         # =========================================================
-        # 按综合得分从高到低排序
-        scored_pool = sorted(scored_pool, key=lambda x: x['综合得分'], reverse=True)
-        
-        # 强制取前 5 名！就算市场全是垃圾，我们也选最抗跌的那 5 只！
-        final_top_stocks = scored_pool[:5]
+        final_top_stocks = []
+        if scored_pool:
+            # 按综合得分从高到低排序
+            scored_pool = sorted(scored_pool, key=lambda x: x['综合得分'], reverse=True)
+            final_top_stocks = scored_pool[:5]
+        else:
+            # 🚀 上帝级绝对防弹兜底：如果 API 瘫痪或者千股跌停导致池子全空，强行抓初筛的前5名红盘活跃股！
+            logger.warning("🚨 积分池为空（可能因API被完全封锁或极端冰点行情），触发【上帝级无脑物理兜底】！")
+            for _, r in candidates.iterrows():
+                if r['pct_chg'] > 0:
+                    final_top_stocks.append({
+                        "代码": r['code'], "名称": r['name'], "现价": r['close'],
+                        "匹配策略": "🆘 盲抓防守底仓 (API故障/无及格)", "今日涨幅": f"{r['pct_chg']:.2f}%", 
+                        "量比": "未知", "成交额": f"{r['amount']/100000000:.1f}亿",
+                        "综合得分": 0 
+                    })
+                if len(final_top_stocks) >= 5: break
                 
         self.target_count = len(final_top_stocks)
         
