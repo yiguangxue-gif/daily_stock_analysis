@@ -54,7 +54,9 @@ class ReboundScreener:
             df['name'] = df['名称']
             df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
             df['amount'] = pd.to_numeric(df['成交额'], errors='coerce').fillna(0)
-            df['market_cap'] = pd.to_numeric(df['总市值'], errors='coerce').fillna(0)
+            df['market_cap'] = pd.to_numeric(df.get('总市值', 0), errors='coerce').fillna(0)
+            # 【新增提取流通市值】
+            df['circ_mv'] = pd.to_numeric(df.get('流通市值', df['market_cap']), errors='coerce').fillna(0)
             df['close'] = pd.to_numeric(df['最新价'], errors='coerce').fillna(0)
             return df, "EastMoney"
         except Exception as e:
@@ -75,6 +77,7 @@ class ReboundScreener:
             df['amount'] = pd.to_numeric(df['成交额'], errors='coerce').fillna(0)
             df['close'] = pd.to_numeric(df['最新价'], errors='coerce').fillna(0)
             df['market_cap'] = 0  
+            df['circ_mv'] = 0  
             return df, "SinaFinance"
         except Exception as e:
             logger.error(f"❌ 双引擎全军覆没: {e}")
@@ -361,17 +364,17 @@ class ReboundScreener:
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 三大游资战法雷达 ({today_str})</h2>
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">🚀 A股定制级 尾盘强势选股雷达 ({today_str})</h2>
             {review_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由三大核心战法 + 绝对防弹兜底机制生成，保证每日送达。</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 提示：本报告由尾盘强势多头选股模型 + 绝对防弹兜底机制生成，保证每日送达。</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【A股三大战法】AI 闭环复盘与 TOP 5 金股 - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【尾盘强势多头】AI 闭环复盘与 TOP 5 金股 - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "AI智能选股"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -441,27 +444,30 @@ class ReboundScreener:
                 strategy_matched = None
                 
                 # ========================================================
-                # 🎯 完全定制你的三大选股策略
+                # 🎯 尾盘选股系统强势来袭 (图片完全定制战法)
                 # ========================================================
                 
-                # 【策略 1：MACD金叉+放量阳线】
-                # 条件：MACD今日红柱(>0)且昨日绿柱(<=0)，量比>1.5，收盘>开盘，涨幅>2%
-                macd_cross = (last['Hist'] > 0 and prev['Hist'] <= 0)
-                if macd_cross and vr > 1.5 and close_p > open_p and row['pct_chg'] > 2.0:
-                    strategy_matched = "📈 MACD金叉+放量阳线"
-                    
-                # 【策略 2：均线多头+缩量回踩】
-                # 条件：均线多头(MA5>MA10>MA20)，今日缩量(量比<0.8)，今日跌幅不大(>-4%)，且最低价或收盘价回踩靠近MA10或MA20
-                elif ma5 > ma10 > ma20 and vr < 0.8 and row['pct_chg'] > -4.0:
-                    dist_ma10 = min(abs(close_p - ma10)/ma10, abs(low_p - ma10)/ma10)
-                    dist_ma20 = min(abs(close_p - ma20)/ma20, abs(low_p - ma20)/ma20)
-                    if dist_ma10 < 0.02 or dist_ma20 < 0.02:
-                        strategy_matched = "🌊 均线多头+缩量回踩"
-                    
-                # 【策略 3：强势连板首阴低吸】
-                # 条件：近10天内有过连续涨停(>=2次)，今日收阴线(收盘<开盘且涨幅<0)，且不是死死封跌停(涨幅>-9%)
-                elif last['Limit_Up_Count_10'] >= 2 and close_p < open_p and -9.0 < row['pct_chg'] < 0:
-                    strategy_matched = "🔥 强势连板首阴低吸"
+                # 【因子 1：流通盘介于50亿到100亿】
+                circ_mv = row.get('circ_mv', row.get('market_cap', 0))
+                # 如果接口没给市值数据，防漏杀设为 True，有数据则严格过滤
+                is_cap_ok = (50_0000_0000 <= circ_mv <= 100_0000_0000) if circ_mv > 0 else True
+                
+                # 【因子 2：收盘涨幅介于2%到5%】
+                is_pct_ok = (2.0 <= row['pct_chg'] <= 5.0)
+                
+                # 【因子 3：高开幅度不超过3%】
+                prev_close = float(prev['收盘'])
+                open_gap = (open_p - prev_close) / prev_close * 100 if prev_close > 0 else 0
+                is_gap_ok = (open_gap <= 3.0)
+                
+                # 【因子 4：成交量温和放大，多头放量上涨】
+                # 温和放大：量比在 1.1 到 4.0 之间
+                # 多头：MA5 > MA10 > MA20
+                # 放量上涨：收盘价 > 开盘价 (纯正阳线)
+                is_vol_bull_ok = (1.1 <= vr <= 4.0) and (ma5 > ma10 > ma20) and (close_p > open_p)
+
+                if is_cap_ok and is_pct_ok and is_gap_ok and is_vol_bull_ok:
+                    strategy_matched = "🎯 尾盘多头温和放量"
 
                 # 记录符合策略的股票
                 if strategy_matched:
