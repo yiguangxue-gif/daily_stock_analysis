@@ -107,14 +107,47 @@ class AnalysisResult:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
+    # =======================================================
+    # 以下为补齐的渲染辅助函数，用于修复 get_emoji 报错，绝对不删减！
+    # =======================================================
+    def get_emoji(self) -> str:
+        emoji_map = {'买入': '🟢', '加仓': '🟢', '强烈买入': '💚', '持有': '🟡', '观望': '⚪', '减仓': '🟠', '卖出': '🔴', '强烈卖出': '❌'}
+        if self.operation_advice in emoji_map: return emoji_map[self.operation_advice]
+        sc = self.sentiment_score
+        return '💚' if sc>=80 else '🟢' if sc>=65 else '🟡' if sc>=55 else '⚪' if sc>=45 else '🟠' if sc>=35 else '🔴'
+
+    def get_confidence_stars(self) -> str:
+        return {'高': '⭐⭐⭐', '中': '⭐⭐', '低': '⭐'}.get(self.confidence_level, '⭐⭐')
+
+    def get_core_conclusion(self) -> str:
+        if self.dashboard and 'core_conclusion' in self.dashboard:
+            return self.dashboard['core_conclusion'].get('one_sentence', self.analysis_summary)
+        return self.analysis_summary
+
+    def get_position_advice(self, has_position: bool = False) -> str:
+        if self.dashboard and 'core_conclusion' in self.dashboard:
+            pos = self.dashboard['core_conclusion'].get('position_advice', {})
+            return pos.get('has_position' if has_position else 'no_position', self.operation_advice)
+        return self.operation_advice
+
+    def get_sniper_points(self) -> Dict[str, str]:
+        return self.dashboard.get('battle_plan', {}).get('sniper_points', {}) if self.dashboard else {}
+
+    def get_checklist(self) -> List[str]:
+        return self.dashboard.get('battle_plan', {}).get('action_checklist', []) if self.dashboard else []
+
+    def get_risk_alerts(self) -> List[str]:
+        return self.dashboard.get('intelligence', {}).get('risk_alerts', []) if self.dashboard else []
+    # =======================================================
+
 
 class GeminiAnalyzer:
     SYSTEM_PROMPT = """你是一位深谙中国A股“资金市”、“情绪市”与“主力收割套路”的顶级游资操盘手。
 
 ## 🛑 【核心法则：魂穿实盘操作】 (最高优先级指令)
 你不是一个高高在上的分析师，你是拿着自己真金白银在交易的操盘手！
-**用户的持仓成本和股数，就是你本人的持仓！** 你绝对不能给出“建议观望”或“逢高减仓”这种模棱两可的废话。
-你必须在 JSON 的 `ai_real_operation` 字段里，用第一人称且带具体数字表达：**“作为操盘手，我现在的成本是X元。结合今天盘面，我今天打算在X元价位卖出/买入多少股，如果跌破X元我就直接无条件割肉！因为...”**
+用户的持仓成本和股数，就是你本人的持仓！ 你绝对不能给出“建议观望”或“逢高减仓”这种模棱两可的废话。
+你必须在 JSON 的 `ai_real_operation` 字段里，用第一人称且带具体数字表达：“作为操盘手，我现在的成本是X元。结合今天盘面，我今天打算在X元价位卖出/买入多少股，如果跌破X元我就直接无条件割肉！因为...”
 
 ## 🌍 【宏观与地缘政治法则】
 在 A股，宏观大事件（如美股暴跌、战争、降息等）拥有最高否决权！必须在 `macro_impact` 字段中，深刻分析系统提供给你的【全球宏观大事件】对该股的致命影响。如果是系统性风险，即便K线好看也必须要求一键清仓避险！
@@ -450,7 +483,7 @@ class GeminiAnalyzer:
             context['user_cost'] = my_cost
             context['user_shares'] = my_shares
             profit_pct = ((curr_price - my_cost) / my_cost * 100)
-            personal_status_text += f"\n### 💰 我的私人持仓 (AI操盘手请注意！)\n* **成本价**：{my_cost:.2f} 元 | **持仓数量**：{my_shares or 0} 股\n* **当前盈亏**：{profit_pct:.2f}%\n* **🚨 法官最高指令**：这是你本人的真实钱袋子！你必须在 `ai_real_operation` 里针对这个成本，给出【非常具体的股票买卖数量和止损价位】，严禁废话连篇！\n"
+            personal_status_text += f"\n### 💰 我的私人持仓 (AI操盘手请注意！)\n* 成本价：{my_cost:.2f} 元 | 持仓数量：{my_shares or 0} 股\n* 当前盈亏：{profit_pct:.2f}%\n* 🚨 法官最高指令：这是你本人的真实钱袋子！你必须在 `ai_real_operation` 里针对这个成本，给出【非常具体的股票买卖数量和止损价位】，严禁废话连篇！\n"
         
         try:
             fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
@@ -478,11 +511,11 @@ class GeminiAnalyzer:
 
         # 汇聚成强大的反收割雷达板块
         hardcore_radar_text = f"""### 🎯 A股反收割核心雷达 (极重要)
-* 👁️‍🗨️ 真假摔/洗盘/诱多判定: **{washout_status}**
-* ⚡ 顶底背离雷达: **{macd_div}**
-* 🧨 炸板监控: **{zhaban_status}**
-* 📉 极度缩量监控: **{diliang_status}**
-* ⚖️ 绝对盈亏比测算: **{rr_status}**
+* 👁️‍🗨️ 真假摔/洗盘/诱多判定: {washout_status}
+* ⚡ 顶底背离雷达: {macd_div}
+* 🧨 炸板监控: {zhaban_status}
+* 📉 极度缩量监控: {diliang_status}
+* ⚖️ 绝对盈亏比测算: {rr_status}
 * 🧱 最大套牢筹码峰 (绝对压力位): 约 {poc_price:.2f}元
 """
 
@@ -527,8 +560,8 @@ class GeminiAnalyzer:
 
 | 项目 | 数据 |
 |------|------|
-| 股票代码 | **{code}** |
-| 股票名称 | **{stock_name}** |
+| 股票代码 | {code} |
+| 股票名称 | {stock_name} |
 | 股票市值风格 | {style_str} |
 | 分析日期 | {context.get('date', '未知')} |
 
@@ -556,15 +589,15 @@ class GeminiAnalyzer:
 | MA10 | {t_ma10} | 中短期趋势 |
 | MA20 | {t_ma20} | 生命周期线 |
 | 均线形态 | {context.get('ma_status', '未知')} | 必须判断是否多头排列 |
-| **量比** | **{rt_vr}** | {rt.get('volume_ratio_desc', '')} |
-| **换手率** | **{rt_turnover}%** | 是否异常放量 |
+| 量比 | {rt_vr} | {rt.get('volume_ratio_desc', '')} |
+| 换手率 | {rt_turnover}% | 是否异常放量 |
 | 乖离率(MA5) | {float(bias_ma5):+.2f}% | {bias_warning} |
 
 ### 筹码分布透视
 
 | 指标 | 数值 | 判定标准 |
 |------|------|----------|
-| **获利比例** | **{profit_ratio:.1%}** | 70-90%时警惕高位派发 |
+| 获利比例 | {profit_ratio:.1%} | 70-90%时警惕高位派发 |
 | 筹码状态 | {chip.get('chip_status', cv_status)} | 观察是否单峰密集 |
 
 ---
@@ -579,14 +612,14 @@ class GeminiAnalyzer:
         # 完美恢复原版的特殊预警插入点
         if context.get('data_missing'):
             prompt += """
-⚠️ **数据缺失警告**
+⚠️ 数据缺失警告
 由于接口限制，当前部分实时指标获取失败（系统已尝试用强算兜底）。
-请忽略不合理的 N/A，重点依据【舆情情报】和强算雷达进行分析，**严禁编造数据**！
+请忽略不合理的 N/A，重点依据【舆情情报】和强算雷达进行分析，严禁编造数据！
 """
         if context.get('is_index_etf'):
             prompt += """
-> ⚠️ **指数/ETF 分析约束**：该标的为指数跟踪型 ETF 或市场指数。
-> - 风险分析仅关注：**指数走势、跟踪误差、市场流动性**
+> ⚠️ 指数/ETF 分析约束：该标的为指数跟踪型 ETF 或市场指数。
+> - 风险分析仅关注：指数走势、跟踪误差、市场流动性
 > - 严禁将基金公司的诉讼、声誉纳入风险警报，不要受个股逻辑干扰！
 """
 
@@ -779,7 +812,16 @@ class GeminiAnalyzer:
             sentiment_score, trend, advice, decision_type = 35, '看空', '卖出', 'sell'
         else:
             decision_type = 'hold'
-        return AnalysisResult(code=code, name=name, sentiment_score=sentiment_score, trend_prediction=trend, operation_advice=advice, decision_type=decision_type, confidence_level='低', analysis_summary=response_text[:500] if response_text else '无分析结果', key_points='大模型 JSON 输出破损，触发安全模式。', risk_warning='建议查阅原始文本。', raw_response=response_text, success=True)
+            
+        return AnalysisResult(
+            code=code, name=name, sentiment_score=sentiment_score, 
+            trend_prediction=trend, operation_advice=advice, 
+            decision_type=decision_type, confidence_level='低', 
+            analysis_summary=response_text[:500] if response_text else 'API已触发限流或出现异常，未能生成有效分析，建议观望。', 
+            key_points='API调用受限，触发安全模式。', 
+            risk_warning='建议查阅原始文本。', 
+            raw_response=response_text, success=True
+        )
 
     def batch_analyze(self, contexts: List[Dict[str, Any]], delay_between: float = 2.0) -> List[AnalysisResult]:
         results = []
