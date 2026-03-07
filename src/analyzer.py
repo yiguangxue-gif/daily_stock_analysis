@@ -257,6 +257,7 @@ class GeminiAnalyzer:
         return bool(self._model or self._anthropic_client or self._openai_client)
     
     def _switch_to_fallback_model(self) -> bool:
+        """中途被限流时，动态降级到备用模型"""
         try:
             import google.generativeai as genai
             cfg = get_config()
@@ -307,45 +308,32 @@ class GeminiAnalyzer:
             return AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='震荡', operation_advice='观望')
         
         try:
-            # 1. 抓取专门新闻并执行【特色关键词熔断】排雷
+            # 1. 获取针对该股的专门新闻
             google_news_text = "未发现该股票的新闻快讯"
-            fatal_risk = False
             try:
-                query = urllib.parse.quote(f"{name} 股票 质押 解禁 违规 存贷双高")
+                query = urllib.parse.quote(f"{name} 股票")
                 rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
                 req = urllib.request.Request(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as res:
                     root = ET.fromstring(res.read())
-                    lines = []
-                    fatal_keywords = ['立案', '调查', '违规', '减持', '处罚', '退市', '造假', '暴雷', 'ST', '平仓', '存贷双高', '商誉减值', '解禁']
-                    for it in root.findall('.//item')[:8]:
-                        title = it.find('title').text
-                        if any(kw in title for kw in fatal_keywords):
-                            lines.append(f"☢️ [风控官警报: 致命利空/解禁减持] {title} [{it.find('pubDate').text[5:16]}]")
-                            fatal_risk = True
-                        else:
-                            lines.append(f"- {title} [{it.find('pubDate').text[5:16]}]")
+                    lines = [f"- {it.find('title').text} [{it.find('pubDate').text[5:16]}]" for it in root.findall('.//item')[:5]]
                     if lines: google_news_text = "\n".join(lines)
             except: pass
 
-            # 2. 抓取全球宏观大事件
+            # 2. 获取全球宏观/突发大事件 (战争、降息等)
             macro_news_text = "今日无重大全球性突发宏观事件"
             try:
-                macro_query = urllib.parse.quote("国际突发 战争 A股 宏观经济 降息")
+                macro_query = urllib.parse.quote("国际突发 战争 A股 宏观经济")
                 macro_rss_url = f"https://news.google.com/rss/search?q={macro_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
                 macro_req = urllib.request.Request(macro_rss_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(macro_req, timeout=5) as macro_res:
                     m_root = ET.fromstring(macro_res.read())
                     m_lines = [f"- 🔴宏观头条: {it.find('title').text}" for it in m_root.findall('.//item')[:4]]
                     if m_lines: macro_news_text = "\n".join(m_lines)
-            except Exception as e: pass
+            except Exception as e: 
+                logger.debug(f"获取宏观新闻失败: {e}")
 
-            # 熔断指令强制注入
-            circuit_breaker_msg = ""
-            if fatal_risk:
-                circuit_breaker_msg = "\n\n⚠️ 【总指挥强制指令】风控官已探明致命利空（如减持、质押、造假）！请空头发挥作用，一票否决任何技术面看多逻辑，强烈建议避险清仓！"
-
-            combined_google_news = f"【情报官与风控官 搜集的情报池】:\n{google_news_text}\n\n【全球宏观大局】:\n{macro_news_text}{circuit_breaker_msg}"
+            combined_google_news = f"【个股最新情报】:\n{google_news_text}\n\n【全球宏观大局(极重要)】:\n{macro_news_text}"
 
             prompt = self._format_prompt(context, name, news_context, combined_google_news)
             res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
@@ -648,7 +636,7 @@ class GeminiAnalyzer:
         chip = context.get('chip', {})
         profit_ratio = chip.get('profit_ratio', syn_profit_ratio / 100)
 
-        prompt = f"""# 决策仪表盘深度多空对抗分析: {name}({code})
+        prompt = f"""# 决策仪表盘深度多空对抗分析: {stock_name}({code})
 
 {personal_status_text}
 {hardcore_radar_text}
