@@ -2,8 +2,8 @@ name: 🚀 A股AI自进化选股雷达
 
 on:
   schedule:
-    # 每天北京时间 15:30 左右运行 (UTC 7:30)
-    - cron: '30 7 * * 1-5'
+    # 每天北京时间 02:10 运行 (UTC 前一日 18:10)
+    - cron: '10 18 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
 jobs:
