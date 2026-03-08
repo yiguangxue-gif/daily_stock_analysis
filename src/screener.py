@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (Tushare VIP防封版)
+A股游资量化选股雷达 - AI 自进化闭环 (彻底绞杀巨无霸版)
 ===================================
 
 核心重构：
-1. 【Tushare 强力接入】：日线优先使用 Tushare 官方接口拉取，彻底免疫东方财富 IP 封锁！
-2. 【分时双引擎】：5分钟尾盘扫描加入新浪财经备用接口，东财卡死瞬间切换。
-3. 【强力消音】：彻底屏蔽了 Google 等第三方库烦人的 FutureWarning 警告。
+1. 【Tushare 市值修补】：当东方财富断联时，动用 Tushare VIP 获取全市场真实市值，精准卡死 50-200亿！
+2. 【物理成交额上限】：若所有市值接口瘫痪，启用“成交额≤15亿”备用防线，物理隔绝宁德时代等超级大盘股！
+3. 【双引擎防封】：K线与分时图均配备 新浪/东财 双引擎自动切换，拒绝卡死。
+4. 【强力消音】：彻底屏蔽了第三方库烦人的 FutureWarning 警告。
 """
 
 import os
@@ -59,9 +60,9 @@ class ReboundScreener:
                 import tushare as ts
                 ts.set_token(self.config.tushare_token)
                 self.pro = ts.pro_api()
-                logger.info("✅ 检测到 Tushare Token，已激活 VIP 行情加速引擎！")
+                logger.info("✅ 检测到 Tushare Token，已激活 VIP 护盾引擎！")
             except Exception as e:
-                logger.warning(f"⚠️ Tushare 初始化失败，将退回普通接口: {e}")
+                logger.warning(f"⚠️ Tushare 初始化失败: {e}")
 
     def _fetch_with_retry(self, func, retries=2, delay=1, *args, **kwargs):
         for attempt in range(retries):
@@ -112,35 +113,14 @@ class ReboundScreener:
             return pd.DataFrame(), "NONE"
 
     def _get_daily_kline(self, code, start_date="20231001"):
-        """🚀 三引擎日线拉取：Tushare VIP -> 东财 -> 新浪"""
-        # 1. 优先使用 Tushare (不封 IP)
-        if self.pro:
-            try:
-                ts_code = f"{code}.SH" if code.startswith(('6', '9')) else f"{code}.SZ"
-                df_daily = self.pro.daily(ts_code=ts_code, start_date=start_date)
-                if not df_daily.empty:
-                    df_basic = self.pro.daily_basic(ts_code=ts_code, start_date=start_date, fields='ts_code,trade_date,turnover_rate')
-                    df = pd.merge(df_daily, df_basic, on=['ts_code', 'trade_date'], how='left')
-                    df = df.sort_values('trade_date').reset_index(drop=True) # Tushare默认倒序，需正序排列
-                    
-                    res = pd.DataFrame()
-                    res['收盘'] = df['close']
-                    res['开盘'] = df['open']
-                    res['最高'] = df['high']
-                    res['最低'] = df['low']
-                    res['成交量'] = df['vol'] * 100 # 将“手”转换为“股”
-                    res['换手率'] = df['turnover_rate']
-                    return res
-            except Exception as e:
-                logger.debug(f"Tushare 接口异常，尝试备用线路: {e}")
-
-        # 2. 降级使用 Akshare 东财接口
+        """🚀 双引擎日线拉取：东财 -> 新浪 (皆为前复权，防除权大坑)"""
+        # 1. 优先使用 Akshare 东财接口
         try:
             return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=1, symbol=code, period="daily", start_date=start_date, adjust="qfq")
-        except Exception as e:
+        except Exception:
             pass
 
-        # 3. 最终降级：新浪财经日线
+        # 2. 降级使用 新浪财经日线
         try:
             symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
             df = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=1, symbol=symbol_sina, start_date=start_date, adjust="qfq")
@@ -157,65 +137,6 @@ class ReboundScreener:
             pass
             
         return None
-
-    def _check_tail_volume(self, code):
-        """
-        🚀 5分钟级盘口显微镜：双引擎防封锁 (东财 -> 新浪)
-        """
-        df_min = None
-        time_col = ''
-        vol_col = ''
-        
-        # 引擎 1：东方财富 5 分钟线
-        try:
-            df_min = self._fetch_with_retry(ak.stock_zh_a_hist_min_em, retries=1, delay=1, symbol=code, period="5", adjust="qfq")
-            if df_min is not None and not df_min.empty:
-                time_col = '时间'
-                vol_col = '成交量'
-        except Exception:
-            pass
-            
-        # 引擎 2：新浪财经 5 分钟线 (如果东财被拉黑，无缝切换)
-        if df_min is None or df_min.empty:
-            try:
-                symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
-                df_min = self._fetch_with_retry(ak.stock_zh_a_minute, retries=1, delay=1, symbol=symbol_sina, period="5", adjust="qfq")
-                if df_min is not None and not df_min.empty:
-                    time_col = 'day'
-                    vol_col = 'volume'
-            except Exception:
-                return False, 0, "双源无分时"
-
-        if df_min is None or df_min.empty:
-            return False, 0, "数据获取异常"
-
-        try:
-            last_time = str(df_min.iloc[-1][time_col])
-            today_date = last_time.split(' ')[0]
-            df_today = df_min[df_min[time_col].astype(str).str.startswith(today_date)]
-            
-            if len(df_today) < 10: 
-                return False, 0, "数据不全"
-                
-            # 尾盘 14:30 - 15:00 是最后 6 根 K 线
-            tail_vol = df_today[vol_col].tail(6).sum()
-            total_vol = df_today[vol_col].sum()
-            
-            if total_vol == 0: 
-                return False, 0, "无成交"
-                
-            ratio = tail_vol / total_vol
-            ratio_pct = ratio * 100
-            
-            if ratio >= 0.18:
-                return True, ratio, f"极度抢筹 ({ratio_pct:.1f}%)"
-            elif ratio >= 0.13:
-                return True, ratio, f"温和流入 ({ratio_pct:.1f}%)"
-            else:
-                return False, ratio, f"无异动 ({ratio_pct:.1f}%)"
-                
-        except Exception as e:
-            return False, 0, "解析异常"
 
     def fetch_macro_news(self):
         news_text = "今日无重大全球性突发宏观事件"
@@ -310,7 +231,6 @@ class ReboundScreener:
         df['最高'] = pd.to_numeric(df['最高'], errors='coerce')
         df['最低'] = pd.to_numeric(df['最低'], errors='coerce')
         df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
-        df['换手率'] = pd.to_numeric(df.get('换手率', 5.0), errors='coerce').fillna(5.0)
         
         df['MA5'] = df['收盘'].rolling(5).mean()
         df['MA10'] = df['收盘'].rolling(10).mean()
@@ -318,6 +238,58 @@ class ReboundScreener:
         df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
         df['Ret_20'] = (df['收盘'] / df['收盘'].shift(20) - 1) * 100
         return df
+
+    def _check_tail_volume(self, code):
+        """
+        🚀 5分钟级盘口显微镜：双引擎防封锁
+        """
+        df_min = None
+        time_col = ''
+        vol_col = ''
+        
+        # 引擎 1：东方财富 5 分钟线
+        try:
+            df_min = self._fetch_with_retry(ak.stock_zh_a_hist_min_em, retries=1, delay=1, symbol=code, period="5", adjust="qfq")
+            if df_min is not None and not df_min.empty:
+                time_col = '时间'
+                vol_col = '成交量'
+        except Exception:
+            pass
+            
+        # 引擎 2：新浪财经 5 分钟线 (东财卡死无缝切换)
+        if df_min is None or df_min.empty:
+            try:
+                symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
+                df_min = self._fetch_with_retry(ak.stock_zh_a_minute, retries=1, delay=1, symbol=symbol_sina, period="5", adjust="qfq")
+                if df_min is not None and not df_min.empty:
+                    time_col = 'day'
+                    vol_col = 'volume'
+            except Exception:
+                return False, 0, "双源无分时"
+
+        if df_min is None or df_min.empty: return False, 0, "获取异常"
+
+        try:
+            last_time = str(df_min.iloc[-1][time_col])
+            today_date = last_time.split(' ')[0]
+            df_today = df_min[df_min[time_col].astype(str).str.startswith(today_date)]
+            
+            if len(df_today) < 10: return False, 0, "数据不全"
+                
+            tail_vol = df_today[vol_col].tail(6).sum()
+            total_vol = df_today[vol_col].sum()
+            
+            if total_vol == 0: return False, 0, "无成交"
+                
+            ratio = tail_vol / total_vol
+            ratio_pct = ratio * 100
+            
+            if ratio >= 0.18: return True, ratio, f"极度抢筹 ({ratio_pct:.1f}%)"
+            elif ratio >= 0.13: return True, ratio, f"温和流入 ({ratio_pct:.1f}%)"
+            else: return False, ratio, f"无异动 ({ratio_pct:.1f}%)"
+                
+        except Exception:
+            return False, 0, "解析异常"
 
     def _generate_fallback_ai_data(self, candidates):
         top_5 = []
@@ -416,7 +388,7 @@ class ReboundScreener:
                     logger.warning(f"⚠️ AI 智能精选尝试失败: {inner_e}")
                     if attempt < max_retries - 1: time.sleep(3)
                     else: return self._generate_fallback_ai_data(candidates)
-        except Exception as outer_e:
+        except Exception:
             return self._generate_fallback_ai_data(candidates)
 
     def send_email_report(self, ai_data, review_records, target_count):
@@ -442,7 +414,7 @@ class ReboundScreener:
             <p>昨日推票隔夜表现：平均收益 <b>{avg_ret:+.2f}%</b>，胜率 <b>{win_rate:.1f}%</b></p>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #f2f2f2;">
-                    <th>名称(代码)</th><th>昨日潜伏价</th><th>今日收盘(估)</th><th>隔夜盈亏</th><th>昨日逻辑</th>
+                    <th>名称(代码)</th><th>昨日潜伏价</th><th>今日收盘</th><th>隔夜盈亏</th><th>昨日逻辑</th>
                 </tr>
             """
             for r in review_records:
@@ -522,7 +494,7 @@ class ReboundScreener:
             logger.error(f"❌ 邮件发送失败: {e}")
 
     def run_screen(self):
-        logger.info("========== 启动【尾盘隔夜套利 - 终极防封锁版】高频雷达 ==========")
+        logger.info("========== 启动【尾盘隔夜套利 - 巨无霸绞杀版】高频雷达 ==========")
         
         df, source = self.get_market_spot()
         if df.empty: return
@@ -530,19 +502,44 @@ class ReboundScreener:
         review_summary, review_records = self.process_review_and_history(df)
         
         logger.info("👉 正在执行全市场极速初筛...")
+        
+        # 🚀 绝杀招式一：Tushare 市值补天术
+        if df['circ_mv'].sum() == 0 and self.pro:
+            try:
+                logger.info("📡 东方财富限流，启用 Tushare VIP 获取真实市值数据...")
+                cal = self.pro.trade_cal(exchange='SSE', is_open='1', start_date=(datetime.now() - pd.Timedelta(days=10)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
+                last_date = cal.iloc[-1]['cal_date']
+                df_basic = self.pro.daily_basic(trade_date=last_date)
+                if df_basic.empty and len(cal) > 1:
+                    df_basic = self.pro.daily_basic(trade_date=cal.iloc[-2]['cal_date'])
+                
+                if not df_basic.empty:
+                    df_basic['code'] = df_basic['ts_code'].str[:6]
+                    df_basic['circ_mv_tushare'] = df_basic['circ_mv'] * 10000
+                    df = df.merge(df_basic[['code', 'circ_mv_tushare']], on='code', how='left')
+                    df['circ_mv'] = np.where(df['circ_mv'] == 0, df['circ_mv_tushare'].fillna(0), df['circ_mv'])
+                    logger.info("✅ Tushare 市值数据修复成功！")
+            except Exception as e:
+                logger.warning(f"⚠️ Tushare市值修复失败: {e}")
+
         df = df[~df['name'].str.contains('ST|退|B')] 
         df = df[~df['code'].str.startswith(('8', '4', '68'))] 
         df = df[df['close'] >= 2.0] 
         df = df[df['amount'] >= 100000000] 
         df = df[(df['pct_chg'] >= 0.5) & (df['pct_chg'] <= 5.5)]
         
-        # 🚀 选项B激活：只狙击 50亿 ~ 200亿 流通盘的游资最爱标的！
-        # (智能豁免：兼容 Sina 备用接口无市值的情况，若为 0 则放行防错杀)
-        df = df[(df['circ_mv'] == 0) | ((df['circ_mv'] >= 50_0000_0000) & (df['circ_mv'] <= 200_0000_0000))]
+        # 🚀 绝杀招式二：物理隔离网
+        if df['circ_mv'].sum() > 0:
+            df = df[(df['circ_mv'] >= 50_0000_0000) & (df['circ_mv'] <= 200_0000_0000)]
+            logger.info("✅ 已启用严格市值过滤: 50亿 - 200亿")
+        else:
+            # 万一 Tushare 也挂了，绝招：日成交额大于 15 亿的绝对是大盘股，直接抹杀！
+            df = df[df['amount'] <= 15_0000_0000]
+            logger.warning("⚠️ 启用【成交额上限 < 15亿】物理隔离宁德时代等超级巨无霸！")
         
-        # 🚀 浓缩精华：从符合条件的标的中，取成交额最大的前 60 名！大幅度降低 API 请求频率，防止封锁！
+        # 精兵简政：只取前 60 名！
         candidates = df.sort_values(by='amount', ascending=False).head(60)
-        logger.info(f"👉 锁定 {len(candidates)} 只最活跃的中盘游资标的，启动【多维积分与 Tushare引擎】...")
+        logger.info(f"👉 锁定 {len(candidates)} 只黄金游资标的，启动【多维积分与双引擎拉取】...")
 
         scored_pool = []
         total_c = len(candidates)
@@ -555,11 +552,11 @@ class ReboundScreener:
             code = row['code']
             name = row['name']
             try:
-                # 🚀 核心优化：底层使用三级降级保护（Tushare -> 东财 -> 新浪）获取日线！
+                # 🚀 K线双引擎：东财卡死秒切新浪
                 df_kline = self._get_daily_kline(code)
                 if df_kline is None or len(df_kline) < 30: continue
                 
-                consecutive_errors = 0 # 成功获取重置计数器
+                consecutive_errors = 0 
                 
                 tech_df = self.calculate_technical_indicators(df_kline)
                 last = tech_df.iloc[-1]
@@ -610,11 +607,10 @@ class ReboundScreener:
                 if limit_up_3d > 0: score -= 20
                 
                 # ========================================================
-                # 维次 5：分时尾盘异动 (按需请求！)
+                # 维次 5：分时尾盘异动 (按需请求)
                 # ========================================================
                 tail_ratio_str = "N/A"
                 
-                # 🚀 节约弹药：只有日线及格(>30分)，才去查双引擎 5 分钟盘口！
                 if score >= 30: 
                     is_tail_vol, tail_ratio, tail_desc = self._check_tail_volume(code)
                     tail_ratio_str = tail_desc
@@ -640,10 +636,10 @@ class ReboundScreener:
                     
                 time.sleep(random.uniform(1.0, 2.0))
                 
-            except Exception as e:
+            except Exception:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
-                    logger.warning("⚠️ API 响应受阻，启动打游击防封锁休眠 (15秒)...")
+                    logger.warning("⚠️ API 响应受阻，启动打游击休眠 (15秒)...")
                     time.sleep(15)
                     consecutive_errors = 0 
                 else:
