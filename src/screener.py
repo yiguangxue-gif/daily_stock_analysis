@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (终极隔夜套利防封锁版)
+A股游资量化选股雷达 - AI 自进化闭环 (Tushare VIP防封版)
 ===================================
 
 核心重构：
-1. 【打游击反爬】：遇到API限流不再直接熔断退出，而是休眠15秒后继续尝试，保证扫描完整。
-2. 【按需请求】：仅对K线形态及格的股票拉取5分钟盘口数据，砍掉70%无效请求，极大降低封IP概率。
-3. 【浓缩精华】：初筛锁定全市场前 60 名最活跃标的，精兵简政。
-4. 【积分容错】：只要总分 >= 0 即保留在积分池，按分数排序，彻底告别空包弹。
+1. 【Tushare 强力接入】：日线优先使用 Tushare 官方接口拉取，彻底免疫东方财富 IP 封锁！
+2. 【分时双引擎】：5分钟尾盘扫描加入新浪财经备用接口，东财卡死瞬间切换。
+3. 【强力消音】：彻底屏蔽了 Google 等第三方库烦人的 FutureWarning 警告。
 """
+
+import os
+import warnings
+# 屏蔽所有过期的警告噪音
+warnings.filterwarnings("ignore")
+os.environ["GRPC_PYTHON_LOG_LEVEL"] = "error"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import akshare as ak
 import pandas as pd
@@ -18,7 +24,6 @@ import logging
 import time
 import random
 import re
-import os
 import csv
 import json
 import urllib.request
@@ -32,17 +37,12 @@ from email.header import Header
 from email.utils import formataddr
 from datetime import datetime
 from json_repair import repair_json
-import warnings
-
-# 屏蔽烦人的第三方库过期警告
-warnings.filterwarnings("ignore", category=FutureWarning)
 
 from src.config import get_config
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# 全局强制超时时间增加到 15秒，防假死
 socket.setdefaulttimeout(15.0)
 
 class ReboundScreener:
@@ -51,6 +51,17 @@ class ReboundScreener:
         self.history_file = "data/screener_history.csv"
         self.lessons_file = "data/ai_lessons.txt"
         os.makedirs("data", exist_ok=True)
+        
+        # 🚀 初始化 Tushare VIP 引擎
+        self.pro = None
+        if self.config.tushare_token:
+            try:
+                import tushare as ts
+                ts.set_token(self.config.tushare_token)
+                self.pro = ts.pro_api()
+                logger.info("✅ 检测到 Tushare Token，已激活 VIP 行情加速引擎！")
+            except Exception as e:
+                logger.warning(f"⚠️ Tushare 初始化失败，将退回普通接口: {e}")
 
     def _fetch_with_retry(self, func, retries=2, delay=1, *args, **kwargs):
         for attempt in range(retries):
@@ -75,11 +86,11 @@ class ReboundScreener:
             df['prev_close'] = pd.to_numeric(df.get('昨收', df['close']), errors='coerce').fillna(0)
             return df, "EastMoney"
         except Exception as e:
-            logger.warning("东方财富接口受限，🔄 正在自动切换至【新浪财经】备用全市场接口...")
+            logger.warning("东方财富全市场接口受限，🔄 无缝切换至【新浪财经】...")
             
         try:
             df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=2, delay=2)
-            logger.info("✅ 新浪财经基础数据拉取完成，正在进行数据清洗...")
+            logger.info("✅ 新浪财经基础数据拉取完成。")
             
             col_map = {'symbol': '代码', 'name': '名称', 'changepercent': '涨跌幅', 'amount': '成交额', 'trade': '最新价', 'open': '今开', 'settlement': '昨收'}
             for eng, chn in col_map.items():
@@ -100,8 +111,113 @@ class ReboundScreener:
             logger.error(f"❌ 双引擎全军覆没: {e}")
             return pd.DataFrame(), "NONE"
 
+    def _get_daily_kline(self, code, start_date="20231001"):
+        """🚀 三引擎日线拉取：Tushare VIP -> 东财 -> 新浪"""
+        # 1. 优先使用 Tushare (不封 IP)
+        if self.pro:
+            try:
+                ts_code = f"{code}.SH" if code.startswith(('6', '9')) else f"{code}.SZ"
+                df_daily = self.pro.daily(ts_code=ts_code, start_date=start_date)
+                if not df_daily.empty:
+                    df_basic = self.pro.daily_basic(ts_code=ts_code, start_date=start_date, fields='ts_code,trade_date,turnover_rate')
+                    df = pd.merge(df_daily, df_basic, on=['ts_code', 'trade_date'], how='left')
+                    df = df.sort_values('trade_date').reset_index(drop=True) # Tushare默认倒序，需正序排列
+                    
+                    res = pd.DataFrame()
+                    res['收盘'] = df['close']
+                    res['开盘'] = df['open']
+                    res['最高'] = df['high']
+                    res['最低'] = df['low']
+                    res['成交量'] = df['vol'] * 100 # 将“手”转换为“股”
+                    res['换手率'] = df['turnover_rate']
+                    return res
+            except Exception as e:
+                logger.debug(f"Tushare 接口异常，尝试备用线路: {e}")
+
+        # 2. 降级使用 Akshare 东财接口
+        try:
+            return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=1, symbol=code, period="daily", start_date=start_date, adjust="qfq")
+        except Exception as e:
+            pass
+
+        # 3. 最终降级：新浪财经日线
+        try:
+            symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
+            df = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=1, symbol=symbol_sina, start_date=start_date, adjust="qfq")
+            if df is not None and not df.empty:
+                res = pd.DataFrame()
+                res['收盘'] = df['close']
+                res['开盘'] = df['open']
+                res['最高'] = df['high']
+                res['最低'] = df['low']
+                res['成交量'] = df['volume']
+                res['换手率'] = 5.0 # 新浪无换手率，给默认健康值以防报错
+                return res
+        except:
+            pass
+            
+        return None
+
+    def _check_tail_volume(self, code):
+        """
+        🚀 5分钟级盘口显微镜：双引擎防封锁 (东财 -> 新浪)
+        """
+        df_min = None
+        time_col = ''
+        vol_col = ''
+        
+        # 引擎 1：东方财富 5 分钟线
+        try:
+            df_min = self._fetch_with_retry(ak.stock_zh_a_hist_min_em, retries=1, delay=1, symbol=code, period="5", adjust="qfq")
+            if df_min is not None and not df_min.empty:
+                time_col = '时间'
+                vol_col = '成交量'
+        except Exception:
+            pass
+            
+        # 引擎 2：新浪财经 5 分钟线 (如果东财被拉黑，无缝切换)
+        if df_min is None or df_min.empty:
+            try:
+                symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
+                df_min = self._fetch_with_retry(ak.stock_zh_a_minute, retries=1, delay=1, symbol=symbol_sina, period="5", adjust="qfq")
+                if df_min is not None and not df_min.empty:
+                    time_col = 'day'
+                    vol_col = 'volume'
+            except Exception:
+                return False, 0, "双源无分时"
+
+        if df_min is None or df_min.empty:
+            return False, 0, "数据获取异常"
+
+        try:
+            last_time = str(df_min.iloc[-1][time_col])
+            today_date = last_time.split(' ')[0]
+            df_today = df_min[df_min[time_col].astype(str).str.startswith(today_date)]
+            
+            if len(df_today) < 10: 
+                return False, 0, "数据不全"
+                
+            # 尾盘 14:30 - 15:00 是最后 6 根 K 线
+            tail_vol = df_today[vol_col].tail(6).sum()
+            total_vol = df_today[vol_col].sum()
+            
+            if total_vol == 0: 
+                return False, 0, "无成交"
+                
+            ratio = tail_vol / total_vol
+            ratio_pct = ratio * 100
+            
+            if ratio >= 0.18:
+                return True, ratio, f"极度抢筹 ({ratio_pct:.1f}%)"
+            elif ratio >= 0.13:
+                return True, ratio, f"温和流入 ({ratio_pct:.1f}%)"
+            else:
+                return False, ratio, f"无异动 ({ratio_pct:.1f}%)"
+                
+        except Exception as e:
+            return False, 0, "解析异常"
+
     def fetch_macro_news(self):
-        logger.info("正在扫描全球宏观与 A股突发大事件...")
         news_text = "今日无重大全球性突发宏观事件"
         try:
             query = urllib.parse.quote("国际突发 战争 A股 宏观经济 降息")
@@ -111,49 +227,39 @@ class ReboundScreener:
                 root = ET.fromstring(res.read())
                 lines = [f"- {it.find('title').text}" for it in root.findall('.//item')[:5]]
                 if lines: news_text = "\n".join(lines)
-        except Exception as e:
+        except Exception:
             pass
         return news_text
 
     def load_ai_lessons(self):
-        if not os.path.exists(self.lessons_file):
-            return "暂无历史避坑教训。"
+        if not os.path.exists(self.lessons_file): return "暂无历史避坑教训。"
         try:
             with open(self.lessons_file, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             lessons = [line.strip() for line in lines if line.strip()]
-            if not lessons:
-                return "暂无历史避坑教训。"
-            return "\n".join(lessons[-10:])
-        except:
-            return "读取历史教训失败。"
+            return "\n".join(lessons[-10:]) if lessons else "暂无历史避坑教训。"
+        except: return "读取历史教训失败。"
 
     def save_ai_lesson(self, lesson):
-        if not lesson or len(lesson) < 5 or "无" in lesson.strip() or "未" in lesson.strip():
-            return
+        if not lesson or len(lesson) < 5 or "无" in lesson.strip() or "未" in lesson.strip(): return
         try:
             with open(self.lessons_file, 'a', encoding='utf-8') as f:
                 date_str = datetime.now().strftime('%Y-%m-%d')
                 f.write(f"[{date_str} 铁律]: {lesson}\n")
-        except:
-            pass
+        except: pass
 
     def process_review_and_history(self, market_df):
         today_str = datetime.now().strftime('%Y-%m-%d')
         review_summary = "暂无往期复盘数据。"
         review_records = []
-        
-        if not os.path.exists(self.history_file):
-            return review_summary, review_records
+        if not os.path.exists(self.history_file): return review_summary, review_records
 
         try:
             df_hist = pd.read_csv(self.history_file)
             unreviewed = df_hist[df_hist['Date_T1'].isna() | (df_hist['Date_T1'] == '')]
-            
             if not unreviewed.empty:
                 logger.info(f"🔍 发现 {len(unreviewed)} 只待复盘的历史金股，正在核算真实盈亏...")
                 total_return, win_count = 0, 0
-                
                 for idx, row in unreviewed.iterrows():
                     code = str(row['Code']).zfill(6)
                     match = market_df[market_df['code'] == code]
@@ -165,29 +271,22 @@ class ReboundScreener:
                             df_hist.at[idx, 'Date_T1'] = today_str
                             df_hist.at[idx, 'Price_T1'] = t1_price
                             df_hist.at[idx, 'Return_Pct'] = round(ret_pct, 2)
-                            
                             total_return += ret_pct
                             if ret_pct > 0: win_count += 1
-                            
                             review_records.append({
                                 "代码": code, "名称": row['Name'], "昨买价": t0_price, 
                                 "今收价": t1_price, "真实涨跌幅": f"{ret_pct:+.2f}%", "AI逻辑": str(row.get('AI_Reason', ''))[:30]
                             })
-                
                 df_hist.to_csv(self.history_file, index=False)
-                
                 if review_records:
                     avg_ret = total_return / len(review_records)
                     win_rate = (win_count / len(review_records)) * 100
-                    
                     review_summary = f"【AI自我进化 - 昨日实盘打脸复盘】\n昨日套利潜伏 {len(review_records)} 只股票，今日平均真实收益率: {avg_ret:+.2f}%，隔夜胜率: {win_rate:.1f}%。\n详细表现如下：\n"
                     for r in review_records:
                         review_summary += f"- {r['名称']}({r['代码']}) | 真实涨跌: {r['真实涨跌幅']} | 逻辑: {r['AI逻辑']}\n"
                     review_summary += "👉 核心指令：请深刻反思上述复盘结果！如果是亏损，说明套利形态选错，请提取避坑教训！\n"
-                    
         except Exception as e:
             logger.error(f"复盘核算发生异常: {e}")
-            
         return review_summary, review_records
 
     def save_todays_picks(self, top5_stocks):
@@ -211,56 +310,16 @@ class ReboundScreener:
         df['最高'] = pd.to_numeric(df['最高'], errors='coerce')
         df['最低'] = pd.to_numeric(df['最低'], errors='coerce')
         df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
+        df['换手率'] = pd.to_numeric(df.get('换手率', 5.0), errors='coerce').fillna(5.0)
         
         df['MA5'] = df['收盘'].rolling(5).mean()
         df['MA10'] = df['收盘'].rolling(10).mean()
         
-        # 连板基因监控
         df['Is_Limit_Up'] = (df['收盘'].pct_change() * 100) > 9.5
-        
-        # 20日最大涨幅 (防追高)
         df['Ret_20'] = (df['收盘'] / df['收盘'].shift(20) - 1) * 100
-        
         return df
 
-    def _check_tail_volume(self, code):
-        """
-        🚀 5分钟级盘口显微镜：专抓 14:30 - 15:00 的尾盘异动！
-        """
-        try:
-            df_min = self._fetch_with_retry(ak.stock_zh_a_hist_min_em, retries=1, delay=1, symbol=code, period="5", adjust="qfq")
-            if df_min is None or df_min.empty: 
-                return False, 0, "暂无分时"
-                
-            last_time = str(df_min.iloc[-1]['时间'])
-            today_date = last_time.split(' ')[0]
-            df_today = df_min[df_min['时间'].astype(str).str.startswith(today_date)]
-            
-            if len(df_today) < 10: 
-                return False, 0, "数据不全"
-                
-            # 尾盘 14:30 - 15:00 是最后 6 根 K 线
-            tail_vol = df_today['成交量'].tail(6).sum()
-            total_vol = df_today['成交量'].sum()
-            
-            if total_vol == 0: 
-                return False, 0, "无成交"
-                
-            ratio = tail_vol / total_vol
-            ratio_pct = ratio * 100
-            
-            if ratio >= 0.18:
-                return True, ratio, f"极度抢筹 ({ratio_pct:.1f}%)"
-            elif ratio >= 0.13:
-                return True, ratio, f"温和流入 ({ratio_pct:.1f}%)"
-            else:
-                return False, ratio, f"无异动 ({ratio_pct:.1f}%)"
-            
-        except Exception as e:
-            return False, 0, "接口超时"
-        
     def _generate_fallback_ai_data(self, candidates):
-        """💥 断网物理直出机制"""
         top_5 = []
         for c in candidates[:5]:
             top_5.append({
@@ -272,9 +331,8 @@ class ReboundScreener:
                 "target_price": "次日盘中冲高溢价",
                 "stop_loss": "破位昨日低点即斩"
             })
-            
         return {
-            "ai_reflection": "【系统预警】AI模块响应受限。以下标的为量化积分引擎根据【防追高+尾盘异动】强制输出，具备极高参考价值。",
+            "ai_reflection": "【系统防空包弹预警】AI 模块响应受限。以下标的为量化积分引擎强制输出。",
             "new_lesson_learned": "无",
             "macro_view": "按资金驱动流派执行尾盘拿货、明早兑现。",
             "top_5": top_5
@@ -286,7 +344,6 @@ class ReboundScreener:
             return self._generate_fallback_ai_data(candidates)
 
         past_lessons = self.load_ai_lessons()
-
         cand_text = ""
         for c in candidates:
             cand_text += f"[{c['代码']}]{c['名称']} | {c['匹配策略']} | 得分:{c['综合得分']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 尾盘:{c['量比']}\n"
@@ -345,13 +402,11 @@ class ReboundScreener:
                         generation_config={"temperature": 0.4, "max_output_tokens": 4096},
                         request_options={"timeout": 120} 
                     )
-                    
                     text = response.text
                     m = re.search(r'(\{.*\})', text, re.DOTALL)
                     json_str = m.group(1) if m else text
                     
                     result_data = json.loads(repair_json(json_str))
-                    
                     if not result_data.get("top_5") or len(result_data["top_5"]) == 0:
                         fallback_data = self._generate_fallback_ai_data(candidates)
                         result_data["top_5"] = fallback_data["top_5"]
@@ -467,37 +522,28 @@ class ReboundScreener:
             logger.error(f"❌ 邮件发送失败: {e}")
 
     def run_screen(self):
-        logger.info("========== 启动【尾盘隔夜套利 - 防卡死积分版】高频雷达 ==========")
+        logger.info("========== 启动【尾盘隔夜套利 - 终极防封锁版】高频雷达 ==========")
         
         df, source = self.get_market_spot()
         if df.empty: return
             
         review_summary, review_records = self.process_review_and_history(df)
         
-        # ========================================================
-        # 第一步：极速海选 (缩减目标防被封 IP)
-        # ========================================================
         logger.info("👉 正在执行全市场极速初筛...")
         df = df[~df['name'].str.contains('ST|退|B')] 
         df = df[~df['code'].str.startswith(('8', '4', '68'))] 
         df = df[df['close'] >= 2.0] 
-        
-        # 门槛卡死在 1 个亿
         df = df[df['amount'] >= 100000000] 
-        # 涨幅锁定：+0.5% ~ +5.5% (只做红盘，绝不抄跌停底)
         df = df[(df['pct_chg'] >= 0.5) & (df['pct_chg'] <= 5.5)]
         
-        # 🚀 浓缩精华：只取前 60 名！大幅度缩减耗时，根本封不到 IP！
+        # 🚀 浓缩精华：只取前 60 名最活跃标的！大幅度降低 API 请求频率，防止封锁！
         candidates = df.sort_values(by='amount', ascending=False).head(60)
-        logger.info(f"👉 锁定 {len(candidates)} 只最活跃标的，启动【多维积分与反爬游击引擎】...")
+        logger.info(f"👉 锁定 {len(candidates)} 只最活跃标的，启动【多维积分与 Tushare引擎】...")
 
         scored_pool = []
         total_c = len(candidates)
         consecutive_errors = 0
         
-        # ========================================================
-        # 第二步：多维积分制 (满分 100，只要及格就有机会)
-        # ========================================================
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
             if i % 10 == 0:
                 logger.info(f"⏳ 积分引擎运转中... 进度: {i} / {total_c} (正在扫描: {row['name']})")
@@ -505,12 +551,13 @@ class ReboundScreener:
             code = row['code']
             name = row['name']
             try:
-                hist = self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=1, symbol=code, period="daily", start_date="20231001", adjust="qfq")
-                if hist is None or len(hist) < 30: continue
+                # 🚀 核心优化：底层使用三级降级保护（Tushare -> 东财 -> 新浪）获取日线！
+                df_kline = self._get_daily_kline(code)
+                if df_kline is None or len(df_kline) < 30: continue
                 
                 consecutive_errors = 0 # 成功获取重置计数器
                 
-                tech_df = self.calculate_technical_indicators(hist)
+                tech_df = self.calculate_technical_indicators(df_kline)
                 last = tech_df.iloc[-1]
                 
                 close_p = float(last['收盘'])
@@ -524,56 +571,46 @@ class ReboundScreener:
                 strategy_matched = "待定"
                 
                 # ----------------------------------------------------
-                # 维次 1：K线基本形态 (修复致命数学Bug)
+                # 维次 1：K线基本形态 
                 # ----------------------------------------------------
                 is_yang = close_p > open_p
-                if is_yang:
-                    score += 15
+                if is_yang: score += 15
                     
-                # 严格使用绝对值和max计算，避免阴线产生负数Bug！
                 body = abs(close_p - open_p)
                 upper_shadow = high_p - max(close_p, open_p)
                 
-                # 上影线太长（大于实体的1.2倍且绝对幅度>1%），一票否决
                 if body > 0 and upper_shadow > body * 1.2 and (upper_shadow / close_p > 0.01):
                     score -= 100
                 elif upper_shadow <= body * 0.5:
-                    score += 15 # 光头或极短上影加分
+                    score += 15 
                     
                 # ----------------------------------------------------
                 # 维次 2：涨幅位置
                 # ----------------------------------------------------
-                if 1.0 <= row['pct_chg'] <= 4.5:
-                    score += 20
-                elif row['pct_chg'] > 0:
-                    score += 10
+                if 1.0 <= row['pct_chg'] <= 4.5: score += 20
+                elif row['pct_chg'] > 0: score += 10
                     
                 # ----------------------------------------------------
                 # 维次 3：均线支撑
                 # ----------------------------------------------------
-                if close_p >= ma5:
-                    score += 10
-                if ma5 > ma10:
-                    score += 10
+                if close_p >= ma5: score += 10
+                if ma5 > ma10: score += 10
                     
                 # ----------------------------------------------------
                 # 维次 4：防高位接力
                 # ----------------------------------------------------
                 ret_20 = float(last['Ret_20']) if not pd.isna(last['Ret_20']) else 0
-                if ret_20 > 25.0:
-                    score -= 30
+                if ret_20 > 25.0: score -= 30
                     
                 limit_up_3d = tech_df['Is_Limit_Up'].tail(3).sum()
-                if limit_up_3d > 0:
-                    score -= 20
+                if limit_up_3d > 0: score -= 20
                 
                 # ========================================================
                 # 维次 5：分时尾盘异动 (按需请求！)
                 # ========================================================
                 tail_ratio_str = "N/A"
                 
-                # 🚀 【节约弹药绝招】：只有日线基础面及格(>30分)的漂亮图形，才去查5分钟盘口！
-                # 没及格的垃圾图形直接跳过请求，不仅省时间，还能躲避东方财富追杀！
+                # 🚀 节约弹药：只有日线及格(>30分)，才去查双引擎 5 分钟盘口！
                 if score >= 30: 
                     is_tail_vol, tail_ratio, tail_desc = self._check_tail_volume(code)
                     tail_ratio_str = tail_desc
@@ -589,7 +626,6 @@ class ReboundScreener:
                 else:
                     strategy_matched = "⚠️ 形态一般或偏弱"
                         
-                # 记录得分 >= 0 的所有股票，大不了排倒数，但绝对不会空池子！
                 if score >= 0:
                     scored_pool.append({
                         "代码": code, "名称": name, "现价": close_p,
@@ -598,35 +634,31 @@ class ReboundScreener:
                         "综合得分": score 
                     })
                     
-                # 增加睡眠时间，装作是真人在缓慢看盘
                 time.sleep(random.uniform(1.0, 2.0))
                 
             except Exception as e:
                 consecutive_errors += 1
-                # 🚀 【打游击策略】：连错4次说明风声紧，休眠 15 秒躲避，绝不直接退出！
-                if consecutive_errors >= 4:
-                    logger.warning("⚠️ 连续拉取失败(触发API限流)，启动打游击防封锁休眠 (15秒)...")
+                if consecutive_errors >= 3:
+                    logger.warning("⚠️ API 响应受阻，启动打游击防封锁休眠 (15秒)...")
                     time.sleep(15)
-                    consecutive_errors = 0 # 休眠完假装无事发生，继续干活！
+                    consecutive_errors = 0 
                 else:
                     time.sleep(3)
                 continue
                 
         # =========================================================
-        # 👑 胜者为王：强制截取前 5 名 (绝不空仓！)
+        # 👑 胜者为王：强制截取前 5 名
         # =========================================================
         final_top_stocks = []
         if scored_pool:
-            # 按综合得分从高到低排序
             scored_pool = sorted(scored_pool, key=lambda x: x['综合得分'], reverse=True)
             final_top_stocks = scored_pool[:5]
         else:
-            # 万一全网断线，上帝级兜底启动！
             logger.warning("🚨 积分池为空，触发【上帝级无脑物理兜底】！")
             for _, r in candidates.iterrows():
                 final_top_stocks.append({
                     "代码": r['code'], "名称": r['name'], "现价": r['close'],
-                    "匹配策略": "🆘 盲抓防守底仓 (API大故障)", "今日涨幅": f"{r['pct_chg']:.2f}%", 
+                    "匹配策略": "🆘 盲抓防守底仓 (极端行情/API挂掉)", "今日涨幅": f"{r['pct_chg']:.2f}%", 
                     "量比": "未知", "成交额": f"{r['amount']/100000000:.1f}亿",
                     "综合得分": 0 
                 })
