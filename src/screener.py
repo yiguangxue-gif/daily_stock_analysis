@@ -536,9 +536,13 @@ class ReboundScreener:
         df = df[df['amount'] >= 100000000] 
         df = df[(df['pct_chg'] >= 0.5) & (df['pct_chg'] <= 5.5)]
         
-        # 🚀 浓缩精华：只取前 60 名最活跃标的！大幅度降低 API 请求频率，防止封锁！
+        # 🚀 选项B激活：只狙击 50亿 ~ 200亿 流通盘的游资最爱标的！
+        # (智能豁免：兼容 Sina 备用接口无市值的情况，若为 0 则放行防错杀)
+        df = df[(df['circ_mv'] == 0) | ((df['circ_mv'] >= 50_0000_0000) & (df['circ_mv'] <= 200_0000_0000))]
+        
+        # 🚀 浓缩精华：从符合条件的标的中，取成交额最大的前 60 名！大幅度降低 API 请求频率，防止封锁！
         candidates = df.sort_values(by='amount', ascending=False).head(60)
-        logger.info(f"👉 锁定 {len(candidates)} 只最活跃标的，启动【多维积分与 Tushare引擎】...")
+        logger.info(f"👉 锁定 {len(candidates)} 只最活跃的中盘游资标的，启动【多维积分与 Tushare引擎】...")
 
         scored_pool = []
         total_c = len(candidates)
