@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (多 Agent + 凯利风控 + 竞价推演大盘共振 终极版)
+A股自选股智能分析系统 - AI分析层 (多Agent连贯回测 + 凯利风控 + 竞价推演 终极版)
 ===================================
 
 核心进化：
 1. 🐉【庄家筹码与游资跟踪】：Agent B 专项识别龙虎榜关联席位及筹码密集套牢区。
 2. 📜【政策与小作文因果链】：实时交叉验证新闻，区分“真政策”与“假传闻”。
 3. 💣【A股特色排雷系统】：Agent C 强制审查“存贷双高”、质押平仓线、解禁期。
-4. 🌡️【情绪周期与资金流向】：结合换手与连板高度，界定“冰点-一致-高潮-崩塌”周期。
-5. 🧠【多空对抗与认知诊断】：多头与空头思维互搏，打脸回测强制归因（技术/政策/情绪/资金）。
-6. 💸【宏观流动性与杠杆】：跟踪两融/汇率逻辑，预防外资抛压与杠杆踩踏。
-7. ⚖️【智能仓位与条件单】：基于近期真实胜率应用凯利公式（Kelly Criterion）。
-8. 🛡️【降维寄生补丁】：将复杂嵌套的 JSON 字段强行拍扁，硬塞入核心结论，确保完美渲染！
-9. 🚀【新增四大神级核武】：大盘Beta共振降仓、深度OBV暗出货雷达、次日9:25竞价剧本推演、主力流出绝对占比！
+4. 🧠【多日连贯对抗与诊断】：Agent C 升级！连看近5次预判打脸记录，深度挖掘主力反复诱多/洗盘的恶劣股性陷阱！
+5. ⚖️【自适应凯利仓位】：只取近5日系统真实胜率，大盘冰点自动大幅缩减凯利安全仓位。
+6. 🚀【新增四大神级核武】：大盘Beta共振降仓、深度OBV暗出货雷达、次日9:25竞价剧本推演、主力流出绝对占比！
 """
 
 import json
@@ -110,9 +107,6 @@ class AnalysisResult:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
-    # =======================================================
-    # 渲染辅助函数
-    # =======================================================
     def get_emoji(self) -> str:
         emoji_map = {'买入': '🟢', '加仓': '🟢', '强烈买入': '💚', '持有': '🟡', '观望': '⚪', '减仓': '🟠', '卖出': '🔴', '强烈卖出': '❌'}
         if self.operation_advice in emoji_map: return emoji_map[self.operation_advice]
@@ -150,12 +144,12 @@ class GeminiAnalyzer:
 在做出最终结论前，你必须在内部模拟多空专家的激烈对抗，并将结论写入 `debate_process` 中：
 - **[Agent A - 多头爆破手]**：死盯 MA/MACD/放量突破。只看多，疯狂寻找情绪共振点与游资主升浪的借口。
 - **[Agent B - 空头狙击手]**：只看空，死盯上方的筹码套牢密集区，寻找诱多出货、财务造假、存贷双高的漏洞，随时准备砸盘。
-- **[Agent C - 认知诊断官]**：根据系统提供的“昨日回测打脸记录”，执行【归因分析】。如果上一次看错导致亏损（或中途被扫损出局），必须诊断出是（技术/政策/情绪/资金）哪方面出了问题，并强制要求本次分析避开该坑！
+- **[Agent C - 认知诊断官]**：系统会为你提供【该股近5次的连贯打脸记录】。如果你发现近期对该股的预判连续亏损或反复被洗盘，说明主力手法极其恶劣或你对其股性判断完全错误！你必须在诊断中指出它的“股性陷阱”，并强制要求本次操作极度谨慎甚至放弃！
 
 ## 🛑 【核心法则：魂穿实盘与凯利公式】
 用户的持仓成本和股数，就是你总指挥本人的真金白银！
 1. **真实交易操作**：必须在 `ai_real_operation` 给出具体的买卖股数、价格和止损位，绝不打太极！
-2. **凯利动态仓位**：系统会给你提供最近的历史胜率和盈亏比，你必须在 `kelly_position_sizing` 字段利用凯利公式计算出该次下注的具体百分比仓位。**特别警告：如果系统提示大盘(上证指数)破位，你的凯利仓位必须强制减半或空仓！**
+2. **凯利动态仓位**：系统会给你提供【近5日系统的真实胜率和盈亏比】，你必须在 `kelly_position_sizing` 字段利用凯利公式计算出该次下注的具体百分比仓位。**特别警告：如果系统近期胜率跌破40%，或大盘破位，凯利仓位必须强制降至极低或空仓！**
 3. **盘中挂单脚本**：在 `conditional_order_script` 中，生成一段自然语言量化脚本。
 4. **集合竞价剧本**：在 `call_auction_script` 中，推演明日 9:25 集合竞价。如：“若明日高开>2%且竞价量超X，顺势加仓；若低开破MA5，集合竞价直接抢跑”。
 
@@ -170,7 +164,7 @@ class GeminiAnalyzer:
     "debate_process": { 
         "bull_agent": "多头爆发手意见...", 
         "bear_agent": "空头狙击手意见...", 
-        "cognitive_bias_diagnosis": "打脸归因：若前次失败，必须写明是技术/政策/资金/情绪的哪一项误判..." 
+        "cognitive_bias_diagnosis": "多日连贯归因：结合近5次打脸记录，深挖该股主力反复诱多/洗盘的陷阱..." 
     },
     "dashboard": {
         "core_conclusion": { "one_sentence": "...", "signal_type": "...", "time_sensitivity": "...", "position_advice": { "no_position": "...", "has_position": "..." } },
@@ -195,7 +189,7 @@ class GeminiAnalyzer:
             "call_auction_script": "明日9:25集合竞价兵棋推演，若高开...若低开...",
             "sniper_points": { "ideal_buy": "XX元", "secondary_buy": "XX元", "trailing_stop": "XX元", "take_profit": "XX元" },
             "grid_trading_plan": { "is_recommended": true, "grid_spacing": "XX元", "buy_grid": "...", "sell_grid": "..." },
-            "position_strategy": { "personal_cost_review": "...", "kelly_position_sizing": "基于凯利公式及大盘Beta算出的安全仓位XX%...", "entry_plan": "...", "risk_control": "..." },
+            "position_strategy": { "personal_cost_review": "...", "kelly_position_sizing": "基于近期连贯胜率算出的安全仓位XX%...", "entry_plan": "...", "risk_control": "..." },
             "action_checklist": ["✅...", "⚠️..."]
         }
     },
@@ -310,7 +304,6 @@ class GeminiAnalyzer:
             return AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='震荡', operation_advice='观望')
         
         try:
-            # 1. 抓取专门新闻并执行排雷
             google_news_text = "未发现该股票的新闻快讯"
             fatal_risk = False
             try:
@@ -331,7 +324,6 @@ class GeminiAnalyzer:
                     if lines: google_news_text = "\n".join(lines)
             except: pass
 
-            # 2. 抓取全球宏观大事件
             macro_news_text = "今日无重大全球性突发宏观事件"
             try:
                 macro_query = urllib.parse.quote("国际突发 战争 A股 宏观经济 降息")
@@ -346,10 +338,8 @@ class GeminiAnalyzer:
             circuit_breaker_msg = "\n\n⚠️ 【总指挥强制指令】风控官已探明致命利空！一票否决任何技术面看多逻辑，强烈建议避险清仓！" if fatal_risk else ""
             combined_google_news = f"【情报官与风控官情报池】:\n{google_news_text}\n\n【全球宏观大局】:\n{macro_news_text}{circuit_breaker_msg}"
 
-            # 组装完整的提示词
             prompt = self._format_prompt(context, name, news_context, combined_google_news)
             
-            # 提交给 AI 生成报告
             res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
             result = self._parse_response(res_text, code, name, context)
             
@@ -361,7 +351,6 @@ class GeminiAnalyzer:
         except Exception as e:
             logger.error(f"分析异常: {e}")
             
-            # 【终极保底防断网物理直出】
             fallback_summary = f"⚠️ **大模型 API 拒绝响应** (限额或超时: {str(e)[:80]})。AI 代理已全部下线，以下为底层量化引擎强算数据（物理直出）：\n\n"
             fallback_summary += context.get('_last_personal', '') + "\n"
             fallback_summary += context.get('_last_radar', '') + "\n"
@@ -404,14 +393,12 @@ class GeminiAnalyzer:
         rps_status = "未知"
         market_beta_status = "大盘指数状态未知"
         
-        # 🚀 [新增核武 1] 竞价剧本：早盘竞价与缺口理论
         if prev_close and open_p:
             gap_pct = (open_p - prev_close) / prev_close * 100
             if gap_pct > 2: gap_str = f"强势跳空高开(+{gap_pct:.2f}%)，具备主升基因"
             elif gap_pct < -2: gap_str = f"弱势跳空低开({gap_pct:.2f}%)，资金抢跑"
             else: gap_str = "平开震荡"
 
-        # 🚀 [新增核武 2] 市场 Beta 共振 (上证指数跌破 MA20 强制降仓)
         try:
             sh_index = ak.stock_zh_index_daily_em(symbol="sh000001")
             if not sh_index.empty and len(sh_index) >= 20:
@@ -434,7 +421,6 @@ class GeminiAnalyzer:
                 else: style_str = f"巨无霸权重({mv_billion:.1f}亿) - 国家队护盘工具"
             except: pass
 
-        # 🚀 [新增核武 3] 股东户数集中度侦测 (暗中吸筹/派发)
         try:
             gdhs = ak.stock_zh_a_gdhs_detail_em(symbol=code)
             if not gdhs.empty and len(gdhs) >= 2:
@@ -470,7 +456,6 @@ class GeminiAnalyzer:
                     vwap_60 = (sp * sv).sum() / sv.sum()
                     if curr_price: syn_profit_ratio = df[sp <= curr_price]['volume'].sum() / sv.sum() * 100
                 
-                # 🚀 RPS 近似20日动量计算
                 try:
                     ret_20d = (sp.iloc[-1] - sp.iloc[-20]) / sp.iloc[-20] * 100
                     rps_status = f"{ret_20d:+.2f}%"
@@ -512,7 +497,6 @@ class GeminiAnalyzer:
                 upper, lower = ma20 + 2 * std20, ma20 - 2 * std20
                 boll_status = "🚀突破上轨(极易被砸)" if curr_price and curr_price > upper.iloc[-1] else "🕳️破下轨" if curr_price and curr_price < lower.iloc[-1] else "中轨运行"
                 
-                # 🚀 [新增核武 4] 深度 OBV 暗中派发雷达
                 exp1, exp2 = sp.ewm(span=12).mean(), sp.ewm(span=26).mean()
                 macd = exp1 - exp2
                 hist_bar = macd - macd.ewm(span=9).mean()
@@ -525,7 +509,6 @@ class GeminiAnalyzer:
                         if sp.iloc[-10:].max() > sp.iloc[-20:-10].max() * 1.02 and hist_bar.iloc[-10:].max() < hist_bar.iloc[-20:-10].max():
                             macd_div = "💀【MACD顶背离】股价创新高但做多动能跟不上，诱多发套，极度危险！"
                             
-                        # 核心级 OBV 背离
                         price_up = df['close'].iloc[-5:].is_monotonic_increasing
                         obv_down = df['obv'].iloc[-5:].is_monotonic_decreasing
                         if price_up and obv_down:
@@ -600,7 +583,7 @@ class GeminiAnalyzer:
             profit_pct = ((curr_price - my_cost) / my_cost * 100)
             personal_status_text += f"\n### 💰 我的私人持仓 (总指挥底牌！)\n* 成本价：{my_cost:.2f} 元 | 持仓数量：{my_shares or 0} 股\n* 当前盈亏：{profit_pct:.2f}%\n* 🚨 总指挥执行指令：这是你自己真金白银的持仓！必须在 `ai_real_operation` 里针对这个成本，给出具体的股票买卖数量和防守割肉止损价！\n"
 
-        # 🚀 [进阶版核武] 真实触损回测算法
+        # 🚀 [进阶版核武] 真实触损多日回测算法 (升级为近5次/近5日连贯反思)
         try:
             db_file = "reports/ai_trade_log.csv"
             os.makedirs(os.path.dirname(db_file), exist_ok=True)
@@ -618,7 +601,12 @@ class GeminiAnalyzer:
                 df_log = pd.read_csv(db_file)
                 if len(df_log) >= 2:
                     df_log['Return'] = df_log.groupby('Code')['ClosePrice'].pct_change() * 100
-                    valid_returns = df_log['Return'].dropna()
+                    
+                    # 1. 提取全局系统近期胜率 (近5日)
+                    recent_dates = sorted(df_log['Date'].unique())[-5:]
+                    recent_log = df_log[df_log['Date'].isin(recent_dates)]
+                    valid_returns = recent_log['Return'].dropna()
+                    
                     if not valid_returns.empty:
                         wins = valid_returns[valid_returns > 0]
                         losses = valid_returns[valid_returns <= 0]
@@ -627,38 +615,47 @@ class GeminiAnalyzer:
                         avg_loss = abs(losses.mean()) if not losses.empty else 2.0
                         system_odds = avg_win / avg_loss if avg_loss > 0 else 1.0
 
-                df_code = df_log[df_log['Code'] == code].tail(3)
+                # 2. 针对该股票的多日连贯回测 (近5次推荐记录)
+                df_code = df_log[df_log['Code'] == code].tail(6) # 包含今天
+                evidence_lines = []
+                
                 if len(df_code) >= 2 and curr_price and curr_price != 'N/A':
-                    past_price = float(df_code.iloc[-2]['ClosePrice'])
-                    past_date = df_code.iloc[-2]['Date']
                     curr_p = float(curr_price)
                     
-                    # 真实触损计算 (通过从df中截取这段时间的最低价)
-                    period_low = curr_p
-                    try:
-                        if 'date' in df.columns:
-                            period_df = df[df['date'] >= past_date]
-                            if not period_df.empty:
-                                period_low = period_df['low'].min()
-                    except: pass
+                    # 遍历历史推荐记录，计算到今天的真实盈亏
+                    for i in range(len(df_code) - 1):
+                        past_price = float(df_code.iloc[i]['ClosePrice'])
+                        past_date = df_code.iloc[i]['Date']
+                        
+                        period_low = curr_p
+                        try:
+                            if 'date' in df.columns:
+                                period_df = df[df['date'] >= past_date]
+                                if not period_df.empty:
+                                    period_low = period_df['low'].min()
+                        except: pass
 
-                    ai_impact = ((curr_p - past_price) / past_price) * 100
-                    mdd_impact = ((period_low - past_price) / past_price) * 100
-                    
-                    # 如果期间最大回撤超过了 5% 的常规止损位，哪怕今天反弹了，也是一次失败的预测！
-                    if mdd_impact < -5.0:
-                        status_judge = f"❌ 盘中触及止损洗盘(期间最大回撤 {mdd_impact:.2f}%)"
-                    elif ai_impact < 0:
-                        status_judge = f"❌ 最终导致亏损"
-                    else:
-                        status_judge = f"✅ 成功获利"
-                    
-                    evidence_impact_text = f"上次分析({past_date}): {past_price:.2f}元 ➔ 今日: {curr_p:.2f}元 | 真实损益: {ai_impact:.2f}% ({status_judge})"
-                    context['_evidence_impact'] = evidence_impact_text
-                    
-                    personal_status_text += f"\n### ⚖️ 绩效审判庭与凯利风控 (实盘回测)\n* {evidence_impact_text}\n"
-                    personal_status_text += f"* **📈 系统全局胜率**: {system_win_rate:.1f}% | **平均盈亏比**: {system_odds:.2f}\n"
-                    personal_status_text += f"* **【认知诊断与凯利指令】**：\n  1. 如果上述审判判定为亏损或被洗盘，Agent C 必须在 debate_process 中进行**归因诊断（反思技术/资金误判）**！\n  2. 总指挥必须利用系统胜率和盈亏比，计算出凯利公式安全仓位，填入 `kelly_position_sizing`！\n"
+                        ai_impact = ((curr_p - past_price) / past_price) * 100
+                        mdd_impact = ((period_low - past_price) / past_price) * 100
+                        
+                        if mdd_impact < -5.0:
+                            status_judge = f"❌ 盘中触损洗盘(最大回撤 {mdd_impact:.2f}%)"
+                        elif ai_impact < 0:
+                            status_judge = f"❌ 最终亏损"
+                        else:
+                            status_judge = f"✅ 成功获利"
+                            
+                        evidence_lines.append(f"[{past_date}分析]: 成本 {past_price:.2f}元 ➔ 今日 {curr_p:.2f}元 | 损益: {ai_impact:.2f}% ({status_judge})")
+
+                    if evidence_lines:
+                        evidence_impact_text = " | ".join(evidence_lines[-3:]) # 取最近3次的明细加入浓缩雷达
+                        context['_evidence_impact'] = evidence_impact_text
+                        
+                        personal_status_text += f"\n### ⚖️ 绩效审判庭与多日连贯风控 (实盘回测)\n"
+                        for line in evidence_lines[-5:]: # 最多展示5次连贯历史
+                            personal_status_text += f"* {line}\n"
+                        personal_status_text += f"* **📈 系统近期全局胜率 (近5日)**: {system_win_rate:.1f}% | **近期平均盈亏比**: {system_odds:.2f}\n"
+                        personal_status_text += f"* **【认知诊断与连贯反思指令】**：\n  1. Agent C 必须纵览上述多日打脸记录。如果该股反复让你亏损或被洗盘，说明主力手法极其恶劣或你对其股性判断完全错误！必须在 debate_process 中进行**深度归因诊断（反思技术/资金误判）**！\n  2. 总指挥必须利用近期真实胜率，计算出凯利公式安全仓位！\n"
         except: pass
 
         usd_cny_desc = "宏观汇率暂稳"
@@ -672,7 +669,6 @@ class GeminiAnalyzer:
             fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
             net_flow = fund_flow.iloc[-1]['主力净流入-净额']
             
-            # 🚀 [新增核武 5] 主力流出绝对占比
             net_flow_ratio = ""
             if context.get('computed_amount') and context['computed_amount'] > 0:
                 ratio = (net_flow / context['computed_amount']) * 100
@@ -715,7 +711,6 @@ class GeminiAnalyzer:
 * 🌡️ 情绪温度计: {greed_fear_idx}
 """
         
-        # 保存到 context 以备发生断联时可以物理直出
         context['_last_personal'] = personal_status_text
         context['_last_radar'] = hardcore_radar_text
         context['_last_news'] = google_news
@@ -982,9 +977,9 @@ class GeminiAnalyzer:
 
                 qs = str(ps.get('quant_position_sizing', ''))
                 if _is_empty_or_na(qs):
-                    ps['quant_position_sizing'] = "建议轻仓(20%)试错"
+                    ps['quant_position_sizing'] = "建议轻仓试错"
                 else:
-                    ps['quant_position_sizing'] = _clean_n_a(qs) or "建议轻仓(20%)试错"
+                    ps['quant_position_sizing'] = _clean_n_a(qs) or "建议轻仓试错"
 
             # =======================================================
             # 🛡️ 降维寄生补丁：把所有核武级数据无损寄生到基础文本中！
@@ -1022,7 +1017,7 @@ class GeminiAnalyzer:
             if cond_cl: flattened_points += f" [盘中挂单]: {cond_cl}"
             
             bias_cl = clean_text(cog_bias)
-            if bias_cl: flattened_points += f" [归因诊断]: {bias_cl}"
+            if bias_cl: flattened_points += f" [多日归因诊断]: {bias_cl}"
             
             bull_cl = clean_text(bull_agent)
             if bull_cl: flattened_points += f" [多头意见]: {bull_cl}"
@@ -1038,7 +1033,7 @@ class GeminiAnalyzer:
                 old_one_sentence = cc.get('one_sentence', '')
                 cc['one_sentence'] = old_one_sentence + "\n\n🤖 联合战报 ➔" + flattened_points
 
-            d['key_points'] = "详情请阅上方联合战报及风控清单"
+            d['key_points'] = "详情请阅上方联合战报及多日回测风控清单"
 
             fixed_json_str = json.dumps(d, ensure_ascii=False)
 
