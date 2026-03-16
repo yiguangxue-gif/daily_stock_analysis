@@ -1,18 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - AI分析层 (多Agent连贯回测 + 精确凯利风控 + 竞价推演 终极版)
+A股自选股智能分析系统 - AI分析层 (5日波段主升浪 + 四大战法 + 八边形终极引擎版)
 ===================================
 
 核心进化：
-1. 🐉【庄家筹码与游资跟踪】：Agent B 专项识别龙虎榜关联席位及筹码密集套牢区。
-2. 📜【政策与小作文因果链】：实时交叉验证新闻，区分“真政策”与“假传闻”。
-3. 💣【A股特色排雷系统】：Agent C 强制审查“存贷双高”、质押平仓线、解禁期。
-4. 🧠【多日连贯对抗与诊断】：Agent C 升级！连看近5次预判打脸记录，深度挖掘主力反复诱多/洗盘的恶劣股性陷阱！
-5. ⚖️【硬核精确凯利仓位】：引入半凯利(Half-Kelly)算法 + 大盘Beta风险熔断因子 + 单股绝对上限锁死。
-6. 🚀【新增四大神级核武】：大盘Beta共振降仓、深度OBV暗出货雷达、次日9:25竞价剧本推演、主力流出绝对占比！
-7. 🕵️‍♂️【超大单散户背离探测】：强制穿透资金流，精准识别“主力派发、散户接盘”的隐蔽绞肉机！
-8. ⏱️【KDJ与RSI极值共振】：底层硬算KDJ高位死叉与RSI超买超跌极值，提前预判情绪拐点！
+1. 🌊【波段视角对齐】：AI 认知从“隔夜跑路”全面升级为“3-5日波段潜伏与格局”。
+2. 🏆【四大神级战法注入】：自动检测该股是否触发（趋势低吸/底部起爆/强庄首阴/均线粘合），指引波段操作。
+3. 🐉【保留八边形引擎】：无损保留 Google 表格持仓同步、内资外资(北向)流向、RSI 情绪极值、真实打脸回测等所有顶级功能！
+4. ⚖️【凯利动态仓位】：基于胜率计算安全下注比例。
 """
 
 import json
@@ -35,7 +31,6 @@ import pandas as pd
 import numpy as np
 import akshare as ak
 
-from src.agent.llm_adapter import get_thinking_extra_body
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -109,54 +104,21 @@ class AnalysisResult:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
-    def get_emoji(self) -> str:
-        emoji_map = {'买入': '🟢', '加仓': '🟢', '强烈买入': '💚', '持有': '🟡', '观望': '⚪', '减仓': '🟠', '卖出': '🔴', '强烈卖出': '❌'}
-        if self.operation_advice in emoji_map: return emoji_map[self.operation_advice]
-        sc = self.sentiment_score
-        return '💚' if sc>=80 else '🟢' if sc>=65 else '🟡' if sc>=55 else '⚪' if sc>=45 else '🟠' if sc>=35 else '🔴'
-
-    def get_confidence_stars(self) -> str:
-        return {'高': '⭐⭐⭐', '中': '⭐⭐', '低': '⭐'}.get(self.confidence_level, '⭐⭐')
-
-    def get_core_conclusion(self) -> str:
-        if self.dashboard and 'core_conclusion' in self.dashboard:
-            return self.dashboard['core_conclusion'].get('one_sentence', self.analysis_summary)
-        return self.analysis_summary
-
-    def get_position_advice(self, has_position: bool = False) -> str:
-        if self.dashboard and 'core_conclusion' in self.dashboard:
-            pos = self.dashboard['core_conclusion'].get('position_advice', {})
-            return pos.get('has_position' if has_position else 'no_position', self.operation_advice)
-        return self.operation_advice
-
-    def get_sniper_points(self) -> Dict[str, str]:
-        return self.dashboard.get('battle_plan', {}).get('sniper_points', {}) if self.dashboard else {}
-
-    def get_checklist(self) -> List[str]:
-        return self.dashboard.get('battle_plan', {}).get('action_checklist', []) if self.dashboard else []
-
-    def get_risk_alerts(self) -> List[str]:
-        return self.dashboard.get('intelligence', {}).get('risk_alerts', []) if self.dashboard else []
-
-
 class GeminiAnalyzer:
-    SYSTEM_PROMPT = """你不再是一个单一的分析师。你现在是一个由三位顶尖专家组成的【A股游资量化私募决策委员会】的“总指挥”。
+    SYSTEM_PROMPT = """你是一个由三位顶尖专家组成的【A股游资量化私募决策委员会】的“总指挥”。
+你的核心操盘理念是：【3-5日波段潜伏，寻找极致缩量回踩，博取轮动主升浪，冲高必砸！】
 
-### 🤖 你的内部 Agent 运作与对抗机制：
-在做出最终结论前，你必须在内部模拟多空专家的激烈对抗，并将结论写入 `debate_process` 中：
-- **[Agent A - 多头爆破手]**：死盯 MA/MACD/放量突破。只看多，疯狂寻找情绪共振点与游资主升浪的借口。
-- **[Agent B - 空头狙击手]**：只看空，死盯上方的筹码套牢密集区，寻找诱多出货、财务造假、存贷双高的漏洞，随时准备砸盘。
-- **[Agent C - 认知诊断官]**：系统会为你提供【该股近5次的连贯打脸记录】。如果你发现近期对该股的预判连续亏损或反复被洗盘，说明主力手法极其恶劣或你对其股性判断完全错误！你必须在诊断中指出它的“股性陷阱”，并强制要求本次操作极度谨慎甚至放弃！
+### 🤖 内部 Agent 对抗机制：
+在 `debate_process` 中模拟多空专家的激烈对抗：
+- **[Agent A - 波段爆发手]**：死盯“四大波段战法”（首阴、均线粘合、底部起爆、趋势低吸）。判断未来 3-5 天的最大冲高潜力。
+- **[Agent B - 空头狙击手]**：死盯上方的筹码套牢密集区、存贷双高、主力资金和外资出逃漏洞，随时警告破位风险。
+- **[Agent C - 认知诊断官]**：根据“打脸回测铁证”，执行归因分析。如果上次看错导致亏损，必须指出是技术、资金还是情绪误判，并强制避坑！
 
-## 🛑 【核心法则：魂穿实盘与精确凯利公式】
-用户的持仓成本和股数，就是你总指挥本人的真金白银！
-1. **真实交易操作**：必须在 `ai_real_operation` 给出具体的买卖股数、价格和止损位，绝不打太极！
-2. **严苛的凯利仓位**：底层量化系统已经为你计算出了精确的【半凯利理论最高仓位】。你必须在 `kelly_position_sizing` 字段中严格遵照系统的上限建议，绝不能超过系统计算出的安全边界！结合个股基本面给出具体的百分比。
-3. **盘中挂单脚本**：在 `conditional_order_script` 中，生成一段自然语言量化脚本。
-4. **集合竞价剧本**：在 `call_auction_script` 中，推演明日 9:25 集合竞价。如：“若明日高开>2%且竞价量超X，顺势加仓；若低开破MA5，集合竞价直接抢跑”。
-
-## 🌍 【宏观流动性与避雷法则】
-跟踪汇率波动对北向资金的影响，警惕融资融券规模暴增导致的“杠杆爆仓风险”。遇到“减持、立案、平仓、解禁”一票否决清仓！
+## 🛑 【核心法则：魂穿实盘与凯利公式】
+1. **波段真实操作**：在 `ai_real_operation` 给出具体的波段操作，如“当前底仓拿5天，冲高至X元减半，跌破X元无条件斩仓”。
+2. **凯利动态仓位**：在 `kelly_position_sizing` 根据系统胜率算出百分比仓位。**若大盘破位，波段仓位强制减半！**
+3. **盘中条件单**：在 `conditional_order_script` 中，生成一段网格或波段防守挂单脚本。
+4. **波段推演剧本**：在 `call_auction_script` 中，推演未来3-5天的走势应对（如：若连续三天无量弱反弹则清仓）。
 
 ## 输出格式：决策仪表盘 JSON (必须是纯 JSON)
 ```json
@@ -164,34 +126,28 @@ class GeminiAnalyzer:
     "stock_name": "股票名称", "sentiment_score": 50, "trend_prediction": "震荡", "operation_advice": "持有",
     "decision_type": "hold", "confidence_level": "中",
     "debate_process": { 
-        "bull_agent": "多头爆发手意见...", 
+        "bull_agent": "波段爆发手意见...", 
         "bear_agent": "空头狙击手意见...", 
-        "cognitive_bias_diagnosis": "多日连贯归因：结合近5次打脸记录，深挖该股主力反复诱多/洗盘的陷阱..." 
+        "cognitive_bias_diagnosis": "打脸归因..." 
     },
     "dashboard": {
-        "core_conclusion": { "one_sentence": "...", "signal_type": "...", "time_sensitivity": "...", "position_advice": { "no_position": "...", "has_position": "..." } },
+        "core_conclusion": { "one_sentence": "...", "signal_type": "...", "time_sensitivity": "波段持仓期(3-5天)", "position_advice": { "no_position": "...", "has_position": "..." } },
         "data_perspective": {
-            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "龙虎榜及游资合力透视...", "anti_harvest_radar": "..." },
+            "a_share_features": { "market_cap_style": "...", "limit_up_gene": "...", "lhb_status": "...", "anti_harvest_radar": "..." },
             "indicator_trinity": { "macd_status": "...", "kdj_cci_status": "...", "boll_status": "..." },
             "price_position": { "current_price": 0.0, "ma5": 0.0, "ma10": 0.0, "ma20": 0.0, "bias_ma5": 0.0, "bias_status": "...", "support_level": "XX元", "resistance_level": "XX元" },
-            "volume_analysis": { "volume_ratio": 0.0, "turnover_rate": 0.0, "volume_status": "...", "sentiment_temperature": "贪婪恐惧/情绪周期温度..." }
+            "volume_analysis": { "volume_ratio": 0.0, "turnover_rate": 0.0, "volume_status": "...", "sentiment_temperature": "..." }
         },
         "intelligence": { 
-            "latest_news": "真政策与小作文验证...", 
-            "macro_impact": "结合提供的国际战争/大盘Beta/汇率分析...",
-            "sector_rotation": "抱团热点雷达与轮动对标...",
-            "macro_liquidity": "两融杠杆变动与汇率/国债宏观关联分析...",
-            "financial_audit": "财报扫雷：存贷双高/质押解禁等...",
-            "risk_alerts": ["..."], 
-            "positive_catalysts": ["..."]
+            "latest_news": "...", "macro_impact": "...", "sector_rotation": "...", "macro_liquidity": "...", "financial_audit": "...", "risk_alerts": ["..."], "positive_catalysts": ["..."]
         },
         "battle_plan": {
-            "ai_real_operation": "用第一人称写！我的真实操作是：【在X元割肉/在X元加仓】...",
-            "conditional_order_script": "若10:30前不破MA5且放量超30%，执行XX仓位挂单...",
-            "call_auction_script": "明日9:25集合竞价兵棋推演，若高开...若低开...",
-            "sniper_points": { "ideal_buy": "XX元", "secondary_buy": "XX元", "trailing_stop": "XX元", "take_profit": "XX元" },
+            "ai_real_operation": "我的波段实盘操作是：...",
+            "conditional_order_script": "波段条件单：...",
+            "call_auction_script": "未来3天波段剧本推演：...",
+            "sniper_points": { "ideal_buy": "XX元", "secondary_buy": "XX元", "trailing_stop": "XX元(波段破位价)", "take_profit": "XX元(波段目标价)" },
             "grid_trading_plan": { "is_recommended": true, "grid_spacing": "XX元", "buy_grid": "...", "sell_grid": "..." },
-            "position_strategy": { "personal_cost_review": "...", "kelly_position_sizing": "系统强算限制为XX%，基于此我建议仓位XX%...", "entry_plan": "...", "risk_control": "..." },
+            "position_strategy": { "personal_cost_review": "...", "kelly_position_sizing": "XX%", "entry_plan": "...", "risk_control": "..." },
             "action_checklist": ["✅...", "⚠️..."]
         }
     },
@@ -233,10 +189,7 @@ class GeminiAnalyzer:
             try:
                 from openai import OpenAI
                 kw = {"api_key": cfg.openai_api_key}
-                if cfg.openai_base_url:
-                    kw["base_url"] = cfg.openai_base_url
-                    if "aihubmix.com" in cfg.openai_base_url: 
-                        kw["default_headers"] = {"APP-Code": cfg.openai_api_key}
+                if cfg.openai_base_url: kw["base_url"] = cfg.openai_base_url
                 self._openai_client = OpenAI(**kw)
                 self._current_model_name = cfg.openai_model
                 self._use_openai = True
@@ -254,18 +207,6 @@ class GeminiAnalyzer:
 
     def is_available(self) -> bool:
         return bool(self._model or self._anthropic_client or self._openai_client)
-    
-    def _switch_to_fallback_model(self) -> bool:
-        try:
-            import google.generativeai as genai
-            cfg = get_config()
-            fallback_model = cfg.gemini_model_fallback
-            self._model = genai.GenerativeModel(model_name=fallback_model, system_instruction=self.SYSTEM_PROMPT)
-            self._current_model_name = fallback_model
-            self._using_fallback = True
-            return True
-        except:
-            return False
 
     def _call_api_with_retry(self, prompt: str, gen_cfg: dict) -> str:
         if self._use_anthropic:
@@ -277,22 +218,16 @@ class GeminiAnalyzer:
             return res.choices[0].message.content
 
         max_retries = max(get_config().gemini_max_retries, 8)
-        tried_fallback = getattr(self, '_using_fallback', False)
         
         for attempt in range(max_retries):
             try:
                 resp = self._model.generate_content(prompt, generation_config=gen_cfg, request_options={"timeout": 120})
-                if resp.text: 
-                    return resp.text
+                if resp.text: return resp.text
             except Exception as e:
                 err_str = str(e).lower()
                 if '429' in err_str or 'quota' in err_str or 'rate' in err_str:
                     match = re.search(r'retry in (\d+\.?\d*)s', err_str)
                     sleep_time = float(match.group(1)) + 3.0 if match else 30.0
-                    logger.warning(f"⚠️ [API限流] 休眠 {sleep_time:.1f} 秒... ({attempt+1}/{max_retries})")
-                    if attempt >= 1 and not tried_fallback:
-                        self._switch_to_fallback_model()
-                        tried_fallback = True
                     time.sleep(sleep_time)
                 else:
                     time.sleep(5)
@@ -307,7 +242,6 @@ class GeminiAnalyzer:
         
         try:
             google_news_text = "未发现该股票的新闻快讯"
-            fatal_risk = False
             try:
                 query = urllib.parse.quote(f"{name} 股票 质押 解禁 违规 存贷双高")
                 rss_url = f"https://news.google.com/rss/search?q={query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
@@ -315,33 +249,17 @@ class GeminiAnalyzer:
                 with urllib.request.urlopen(req, timeout=5) as res:
                     root = ET.fromstring(res.read())
                     lines = []
-                    fatal_keywords = ['立案', '调查', '违规', '减持', '处罚', '退市', '造假', '暴雷', 'ST', '平仓', '存贷双高', '商誉减值', '解禁']
-                    for it in root.findall('.//item')[:8]:
+                    fatal_keywords = ['立案', '调查', '违规', '减持', '处罚', '退市', '造假', '暴雷', 'ST', '平仓', '存贷双高', '解禁']
+                    for it in root.findall('.//item')[:6]:
                         title = it.find('title').text
                         if any(kw in title for kw in fatal_keywords):
-                            lines.append(f"☢️ [风控官警报: 致命利空/解禁减持] {title} [{it.find('pubDate').text[5:16]}]")
-                            fatal_risk = True
+                            lines.append(f"☢️ [风控警报: 利空/解禁减持] {title}")
                         else:
-                            lines.append(f"- {title} [{it.find('pubDate').text[5:16]}]")
+                            lines.append(f"- {title}")
                     if lines: google_news_text = "\n".join(lines)
             except: pass
 
-            macro_news_text = "今日无重大全球性突发宏观事件"
-            try:
-                macro_query = urllib.parse.quote("国际突发 战争 A股 宏观经济 降息")
-                macro_rss_url = f"https://news.google.com/rss/search?q={macro_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-                macro_req = urllib.request.Request(macro_rss_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(macro_req, timeout=5) as macro_res:
-                    m_root = ET.fromstring(macro_res.read())
-                    m_lines = [f"- 🔴宏观头条: {it.find('title').text}" for it in m_root.findall('.//item')[:4]]
-                    if m_lines: macro_news_text = "\n".join(m_lines)
-            except Exception as e: pass
-
-            circuit_breaker_msg = "\n\n⚠️ 【总指挥强制指令】风控官已探明致命利空！一票否决任何技术面看多逻辑，强烈建议避险清仓！" if fatal_risk else ""
-            combined_google_news = f"【情报官与风控官情报池】:\n{google_news_text}\n\n【全球宏观大局】:\n{macro_news_text}{circuit_breaker_msg}"
-
-            prompt = self._format_prompt(context, name, news_context, combined_google_news)
-            
+            prompt = self._format_prompt(context, name, news_context, google_news_text)
             res_text = self._call_api_with_retry(prompt, {"temperature": 0.7, "max_output_tokens": 8192})
             result = self._parse_response(res_text, code, name, context)
             
@@ -352,20 +270,9 @@ class GeminiAnalyzer:
             
         except Exception as e:
             logger.error(f"分析异常: {e}")
-            
-            fallback_summary = f"⚠️ **大模型 API 拒绝响应** (限额或超时: {str(e)[:80]})。AI 代理已全部下线，以下为底层量化引擎强算数据（物理直出）：\n\n"
-            fallback_summary += context.get('_last_personal', '') + "\n"
-            fallback_summary += context.get('_last_radar', '') + "\n"
-            fallback_summary += context.get('_last_news', '')
-            
-            result = AnalysisResult(
-                code=code, name=name, sentiment_score=50, trend_prediction='未知(API断联)', 
-                operation_advice='观望', decision_type='hold', confidence_level='低',
-                analysis_summary=fallback_summary, success=True, raw_response=fallback_summary
-            )
+            fallback_summary = f"⚠️ API 断联物理直出 ({str(e)[:80]})：\n" + context.get('_last_personal', '') + "\n" + context.get('_last_radar', '')
+            result = AnalysisResult(code=code, name=name, sentiment_score=50, trend_prediction='未知', operation_advice='观望', analysis_summary=fallback_summary, success=True, raw_response=fallback_summary)
             result.market_snapshot = self._build_market_snapshot(context)
-            result.user_cost = context.get('user_cost')
-            result.user_shares = context.get('user_shares')
             return result
 
     def _safe_float(self, val: Any) -> Optional[float]:
@@ -376,537 +283,186 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         today = context.get('today', {})
         curr_price = self._safe_float(today.get('close'))
-        yesterday = context.get('yesterday', {})
-        prev_close = self._safe_float(yesterday.get('close'))
-        open_p = self._safe_float(today.get('open'))
         
-        vwap_60 = syn_profit_ratio = calc_ma5 = calc_ma10 = calc_ma20 = calc_ma60 = calc_vr = current_atr = poc_price = 0.0
-        gap_str = cci_status = obv_status = kdj_status = boll_status = macd_status = gene_str = cv_status = ma60_status = k_body_status = "未知"
-        lianban_status = "未连板"
-        style_str = "风格未知"
-        washout_status = "正常震荡"
-        rr_status = "无法测算"
-        macd_div = "无明显顶底背离"
-        zhaban_status = "安全"
-        diliang_status = "非极限地量"
-        greed_fear_idx = "中性(50)"
-        emotion_cycle = "混沌震荡期"
-        gd_status = "近期无数据"
-        rps_status = "未知"
-        market_beta_status = "大盘指数状态未知"
-        rsi_status = "未知"
-        kdj_status = "未知"
+        calc_ma5 = calc_ma10 = calc_ma20 = calc_vr = poc_price = current_atr = 0.0
+        strategy_str = "未触发四大波段神级战法"
         
-        if prev_close and open_p:
-            gap_pct = (open_p - prev_close) / prev_close * 100
-            if gap_pct > 2: gap_str = f"强势跳空高开(+{gap_pct:.2f}%)，具备主升基因"
-            elif gap_pct < -2: gap_str = f"弱势跳空低开({gap_pct:.2f}%)，资金抢跑"
-            else: gap_str = "平开震荡"
-
-        try:
-            sh_index = ak.stock_zh_index_daily_em(symbol="sh000001")
-            if not sh_index.empty and len(sh_index) >= 20:
-                sh_close = sh_index['close'].iloc[-1]
-                sh_ma20 = sh_index['close'].tail(20).mean()
-                if sh_close < sh_ma20:
-                    market_beta_status = f"🔴 极度危险：上证指数({sh_close:.2f})已跌破MA20生命线({sh_ma20:.2f})！覆巢之下无完卵，系统性风险极高，【凯利仓位必须强制减半】！"
-                else:
-                    market_beta_status = f"🟢 安全：上证指数({sh_close:.2f})站稳MA20，大盘Beta环境支撑做多。"
-        except: pass
-
-        rt = context.get('realtime', {})
-        total_mv = rt.get('total_mv', None)
-        if total_mv:
-            try:
-                mv_billion = float(total_mv) / 100000000
-                if mv_billion < 50: style_str = f"微小盘壳股({mv_billion:.1f}亿) - 游资爆炒最爱，极度活跃"
-                elif mv_billion < 200: style_str = f"中盘题材股({mv_billion:.1f}亿) - 机构与大游资混战区"
-                elif mv_billion < 1000: style_str = f"大盘蓝筹股({mv_billion:.1f}亿) - 机构主导，趋势走法为主"
-                else: style_str = f"巨无霸权重({mv_billion:.1f}亿) - 国家队护盘工具"
-            except: pass
-
-        try:
-            gdhs = ak.stock_zh_a_gdhs_detail_em(symbol=code)
-            if not gdhs.empty and len(gdhs) >= 2:
-                latest_gd = gdhs.iloc[0]['本次持股人数']
-                prev_gd = gdhs.iloc[1]['本次持股人数']
-                gd_chg = (latest_gd - prev_gd) / prev_gd * 100
-                if gd_chg < -3:
-                    gd_status = f"股东数锐减 {-gd_chg:.1f}% (散户被洗，主力疯狂吸筹)"
-                elif gd_chg > 3:
-                    gd_status = f"股东数激增 {gd_chg:.1f}% (筹码极度分散，警惕主力派发散户接盘)"
-                else:
-                    gd_status = f"股东数变化不大 ({gd_chg:+.1f}%)"
-        except: pass
-
+        # 🚀 [核心注入] 四大波段神级战法在分析引擎中的应用
         if 'history' in context and len(context['history']) > 0:
             try:
                 df = pd.DataFrame(context['history']).tail(120)
-                for c in ['close', 'high', 'low', 'open', 'volume', 'pct_chg', 'amount']:
+                for c in ['close', 'open', 'high', 'low', 'volume', 'pct_chg']:
                     if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').ffill().fillna(0)
-                sp, sv = df['close'], df['volume']
                 
-                context['computed_close'] = sp.iloc[-1]
-                context['computed_open'] = df['open'].iloc[-1]
-                context['computed_high'] = df['high'].iloc[-1]
-                context['computed_low'] = df['low'].iloc[-1]
-                context['computed_volume'] = sv.iloc[-1]
-                if 'amount' in df.columns: context['computed_amount'] = df['amount'].iloc[-1]
-                if 'pct_chg' in df.columns: context['computed_pct_chg'] = df['pct_chg'].iloc[-1]
-                
-                if not curr_price: curr_price = sp.iloc[-1]
-                
-                if sv.sum() > 0:
-                    vwap_60 = (sp * sv).sum() / sv.sum()
-                    if curr_price: syn_profit_ratio = df[sp <= curr_price]['volume'].sum() / sv.sum() * 100
-                
-                try:
-                    ret_20d = (sp.iloc[-1] - sp.iloc[-20]) / sp.iloc[-20] * 100
-                    rps_status = f"{ret_20d:+.2f}%"
-                except: pass
-
-                calc_ma5 = sp.rolling(5, min_periods=1).mean().iloc[-1]
-                calc_ma10 = sp.rolling(10, min_periods=1).mean().iloc[-1]
-                calc_ma20 = sp.rolling(20, min_periods=1).mean().iloc[-1]
-                calc_ma60 = sp.rolling(60, min_periods=1).mean().iloc[-1]
-                context['calc_ma5'], context['calc_ma10'], context['calc_ma20'] = calc_ma5, calc_ma10, calc_ma20
-                
-                calc_vr = (sv.iloc[-1] / sv.iloc[-6:-1].mean()) if len(sv)>=6 and sv.iloc[-6:-1].mean()>0 else 1.0
-                context['calc_vr'] = calc_vr
-                
-                try:
-                    turnover = float(rt.get('turnover_rate', 0))
-                    zt_mask = df['pct_chg'] > 9.5
-                    zt_count = 0
-                    for val in reversed(zt_mask.tolist()):
-                        if val: zt_count += 1
-                        else: break
+                if 'pct_chg' not in df.columns:
+                    df['pct_chg'] = df['close'].pct_change() * 100
                     
-                    if zt_count >= 3:
-                        emotion_cycle = "🔥 情绪高潮主升期 (留意随时分歧反杀)"
-                    elif df['pct_chg'].iloc[-1] < -5 and zt_count == 0 and turnover > 15:
-                        emotion_cycle = "💀 情绪崩塌退潮期 (高位派发，严禁接刀)"
-                    elif calc_vr < 0.7 and abs(df['pct_chg'].iloc[-1]) < 2:
-                        emotion_cycle = "🧊 情绪冰点期 (抛压枯竭，寻找左侧试错点)"
-
-                    if df['pct_chg'].iloc[-1] > 5 and turnover > 20 and calc_vr > 2:
-                        greed_fear_idx = "🔥极度贪婪(90) - 筹码极其松动，散户接盘预警！"
-                    elif df['pct_chg'].iloc[-1] < -5 and turnover < 3 and calc_vr < 0.7:
-                        greed_fear_idx = "🧊极度恐惧(10) - 恐慌盘已出尽，存在被错杀可能。"
-                    else:
-                        greed_fear_idx = f"中性温度(50) - 换手率{turnover:.1f}%"
-                except: pass
-
-                ma20, std20 = sp.rolling(20, min_periods=1).mean(), sp.rolling(20, min_periods=1).std().fillna(0)
-                upper, lower = ma20 + 2 * std20, ma20 - 2 * std20
-                boll_status = "🚀突破上轨(极易被砸)" if curr_price and curr_price > upper.iloc[-1] else "🕳️破下轨" if curr_price and curr_price < lower.iloc[-1] else "中轨运行"
+                df['ma5'] = df['close'].rolling(5).mean()
+                df['ma10'] = df['close'].rolling(10).mean()
+                df['ma20'] = df['close'].rolling(20).mean()
+                df['ma30'] = df['close'].rolling(30).mean()
+                df['ma60'] = df['close'].rolling(60).mean()
+                df['Vol_MA5'] = df['volume'].rolling(5).mean()
+                df['Max_Pct_10d'] = df['pct_chg'].rolling(10).max()
                 
-                exp1, exp2 = sp.ewm(span=12).mean(), sp.ewm(span=26).mean()
-                macd = exp1 - exp2
-                hist_bar = macd - macd.ewm(span=9).mean()
-                df['obv'] = (np.sign(sp.diff().fillna(0)) * sv).cumsum()
+                last = df.iloc[-1]
+                calc_ma5, calc_ma10, calc_ma20 = last['ma5'], last['ma10'], last['ma20']
                 
-                try:
-                    if len(df) >= 20:
-                        if sp.iloc[-10:].min() < sp.iloc[-20:-10].min() * 0.98 and hist_bar.iloc[-10:].min() > hist_bar.iloc[-20:-10].min():
-                            macd_div = "🌟【MACD底背离】股价创新低但做空动能衰退，随时引爆报复性反弹，别割肉！"
-                        if sp.iloc[-10:].max() > sp.iloc[-20:-10].max() * 1.02 and hist_bar.iloc[-10:].max() < hist_bar.iloc[-20:-10].max():
-                            macd_div = "💀【MACD顶背离】股价创新高但做多动能跟不上，诱多发套，极度危险！"
-                            
-                        price_up = df['close'].iloc[-5:].is_monotonic_increasing
-                        obv_down = df['obv'].iloc[-5:].is_monotonic_decreasing
-                        if price_up and obv_down:
-                            obv_status = "🩸【致命量价背离】近5日股价创高，但OBV真实资金连续撤退！极可能是主力拉高掩护出货！"
-                        elif not price_up and not obv_down and curr_price > calc_ma20:
-                            obv_status = "🌊【良性洗盘】股价回调但OBV未见出逃，主力控盘死锁。"
-                        else:
-                            obv_status = "量价走势基本匹配"
-                except: pass
+                vol_today = float(last['volume'])
+                vol_ma5 = float(last['Vol_MA5'])
+                close_p = float(last['close'])
+                open_p = float(last['open'])
+                pct_chg = float(last['pct_chg'])
                 
-                try:
-                    if len(sv) >= 20 and sv.iloc[-1] <= sv.iloc[-20:-1].min() * 1.1:
-                        diliang_status = "💡【极限地量】成交量逼近近20日极小值，抛压彻底枯竭！"
-                except: pass
-
-                try:
-                    if len(df) >= 2 and curr_price and df['close'].iloc[-2] > 0 and (df['high'].iloc[-1] - df['close'].iloc[-2])/df['close'].iloc[-2] > 0.09:
-                        if curr_price < df['high'].iloc[-1] * 0.96: zhaban_status = "⚠️【炸板被埋】盘中涨停被砸开，恶劣派发形态！"
-                except: pass
-
-                current_atr = pd.concat([df['high']-df['low'], (df['high']-sp.shift()).abs(), (df['low']-sp.shift()).abs()], axis=1).max(axis=1).rolling(14, min_periods=1).mean().iloc[-1]
-                context['calc_atr'] = current_atr
+                if vol_ma5 > 0: calc_vr = vol_today / vol_ma5
                 
-                if sp.nunique() > 1: poc_price = df.groupby(pd.cut(sp, bins=12, duplicates='drop'), observed=False)['volume'].sum().idxmax().mid 
-                else: poc_price = curr_price or 0.0
-                context['calc_poc'] = poc_price
-
-                # 🚀 [外挂升级]: 情绪极值 (RSI) 与 动量反转 (KDJ)
-                try:
-                    delta = sp.diff()
-                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                    rs = gain / loss
-                    rsi_14 = (100 - (100 / (1 + rs))).fillna(50).iloc[-1]
-                    rsi_status = f"🔥严重超买(RSI={rsi_14:.1f})" if rsi_14 > 80 else f"🧊严重超跌(RSI={rsi_14:.1f})" if rsi_14 < 20 else f"中性(RSI={rsi_14:.1f})"
+                # 战法判断
+                matched_strategies = []
+                
+                # 战法A: 趋势低吸
+                if last['ma20'] > last['ma60'] and abs(close_p - last['ma20'])/last['ma20'] <= 0.03 and vol_today < vol_ma5 * 0.8:
+                    matched_strategies.append("🥇 战法A: 趋势低吸 (均线多头，缩量回踩MA20生命线)")
                     
-                    low_min = df['low'].rolling(9).min()
-                    high_max = df['high'].rolling(9).max()
-                    rsv = (sp - low_min) / (high_max - low_min + 1e-8) * 100
-                    k_val = rsv.ewm(alpha=1/3, adjust=False).mean()
-                    d_val = k_val.ewm(alpha=1/3, adjust=False).mean()
+                # 战法B: 底部起爆
+                if len(df) > 2 and df['close'].iloc[-2] < df['ma60'].iloc[-2] and close_p > last['ma60'] and vol_today > vol_ma5 * 2.0 and pct_chg > 4.0:
+                    matched_strategies.append("🥇 战法B: 底部起爆 (低位爆量突破半年线，反转确立)")
                     
-                    kdj_status = "🚨高位死叉预警(J值掉头向下)" if (k_val.iloc[-1] < d_val.iloc[-1] and k_val.iloc[-2] >= d_val.iloc[-2] and k_val.iloc[-1] > 80) else "🟢低位金叉(J值拐头向上)" if (k_val.iloc[-1] > d_val.iloc[-1] and k_val.iloc[-2] <= d_val.iloc[-2] and k_val.iloc[-1] < 20) else "无极端反转信号"
-                except:
-                    pass
-
-                if curr_price and 'pct_chg' in df.columns:
-                    chg_today = df['pct_chg'].iloc[-1]
-                    if chg_today < -2 and calc_vr < 0.7 and curr_price > calc_ma20: washout_status = "📉 【恶意洗盘】缩量跌未破20日线，主力洗盘逼割肉！"
-                    elif chg_today < -2 and calc_vr > 1.5 and curr_price < calc_ma20: washout_status = "🩸 【放量出货】暴跌破位，主力真逃跑，立刻止损！"
-                    elif chg_today > 2 and calc_vr > 2.0 and curr_price > upper.iloc[-1]: washout_status = "🌋 【高位诱多】爆量刺破上轨，极易上影线骗炮！"
-                    elif chg_today > 2 and calc_vr <= 1.2: washout_status = "🚀 【锁仓拉升】缩量上涨，主力高度控盘没人抛！"
+                # 战法C: 强庄首阴
+                if last['Max_Pct_10d'] > 8.0 and -6.0 <= pct_chg < 0 and vol_today < vol_ma5 * 0.7:
+                    matched_strategies.append("🥇 战法C: 强庄首阴 (强庄股首次极致缩量回踩，极佳潜伏点)")
                     
-                    # 🚀 [外挂升级]: 吊灯止损法 (Chandelier Exit) - 动态追踪止损保护利润
-                    recent_highest = df['high'].rolling(14, min_periods=1).max().iloc[-1]
-                    chandelier_stop = recent_highest - 2.5 * current_atr if current_atr > 0 else curr_price * 0.92
-                    # 动态防守位取 [常规ATR止损] 与 [吊灯止损] 孰高，有效防止利润回撤
-                    stop_loss_p = max(curr_price - 1.5 * current_atr, chandelier_stop) if current_atr > 0 else curr_price * 0.95
+                # 战法D: 均线粘合
+                ma_max = max(calc_ma5, calc_ma10, calc_ma20)
+                ma_min = min(calc_ma5, calc_ma10, calc_ma20)
+                if ma_min > 0 and (ma_max - ma_min)/ma_min < 0.03 and close_p > ma_max and open_p < ma_min and pct_chg > 3.0:
+                    matched_strategies.append("🥇 战法D: 均线粘合 (一阳穿三线，波段主升浪爆发前夕)")
                     
-                    risk = curr_price - stop_loss_p
-                    reward = poc_price - curr_price if poc_price > curr_price else 0
-                    if risk > 0:
-                        rr = reward / risk
-                        if rr < 1.0: rr_status = f"盈亏比极差({rr:.2f})！严禁盲目开仓！"
-                        elif rr > 2.0: rr_status = f"盈亏比极佳({rr:.2f})！防守位{stop_loss_p:.2f}，值得博弈。"
-                        else: rr_status = f"盈亏比一般({rr:.2f})，控制仓位。"
-
-                if 'pct_chg' in df.columns:
-                    lianban_count = 0
-                    for val in reversed(df['pct_chg'].tolist()):
-                        if val >= 9.5: lianban_count += 1
-                        else: break
+                if matched_strategies:
+                    strategy_str = "\n".join(matched_strategies)
                     
-                    # 🚀 [外挂升级]: 游资断板与核按钮雷达
-                    if lianban_count == 0 and len(df) >= 2 and df['pct_chg'].iloc[-2] >= 9.5:
-                        lianban_status = "🩸【断板预警】昨日涨停今日断板，短线资金极大概率正在抢跑撤退！"
-                    else:
-                        lianban_status = f"🚀当前高度: {lianban_count}连板" if lianban_count > 0 else "当前未连板"
+                # ATR 和 筹码密集区
+                current_atr = pd.concat([df['high']-df['low'], (df['high']-df['close'].shift()).abs(), (df['low']-df['close'].shift()).abs()], axis=1).max(axis=1).rolling(14).mean().iloc[-1]
+                if df['close'].nunique() > 1: poc_price = df.groupby(pd.cut(df['close'], bins=12, duplicates='drop'), observed=False)['volume'].sum().idxmax().mid 
+                else: poc_price = curr_price
+                
+                context['calc_ma5'] = calc_ma5; context['calc_ma10'] = calc_ma10; context['calc_ma20'] = calc_ma20
+                context['calc_vr'] = calc_vr; context['calc_poc'] = poc_price; context['calc_atr'] = current_atr
                 
             except Exception as e: logger.debug(f"强算引擎异常: {e}")
 
-        my_cost, my_shares = None, None
+        # =======================================================
+        # 🛡️ 八边形终极引擎 (外资追踪 + 胜率打脸系统 + Google Sheet)
+        # =======================================================
         personal_status_text = ""
-        system_win_rate = 50.0
-        system_odds = 1.0
-        evidence_impact_text = ""
-        kelly_desc = "数据不足，建议按个人风控轻仓。"
-        kelly_suggested_pos = 0.0
-
         try:
-            url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as res:
-                content = res.read().decode('utf-8-sig')
-                for row in csv.reader(io.StringIO(content)):
-                    if len(row) >= 2 and row[0].strip() and ''.join(filter(str.isdigit, str(row[0]))).zfill(6) == code:
-                        my_cost = float(str(row[1]).replace(',', '').strip())
-                        if len(row) >= 3 and row[2].strip(): my_shares = int(float(str(row[2]).replace(',', '').strip()))
-        except: pass
-
-        if my_cost and curr_price:
-            context['user_cost'] = my_cost
-            context['user_shares'] = my_shares
-            profit_pct = ((curr_price - my_cost) / my_cost * 100)
-            personal_status_text += f"\n### 💰 我的私人持仓 (总指挥底牌！)\n* 成本价：{my_cost:.2f} 元 | 持仓数量：{my_shares or 0} 股\n* 当前盈亏：{profit_pct:.2f}%\n* 🚨 总指挥执行指令：这是你自己真金白银的持仓！必须在 `ai_real_operation` 里针对这个成本，给出具体的股票买卖数量和防守割肉止损价！\n"
-
-        # 🚀 [进阶版核武] 真实触损多日回测算法 + 凯利公式核心
-        try:
-            db_file = "reports/ai_trade_log.csv"
-            os.makedirs(os.path.dirname(db_file), exist_ok=True)
-            today_str = context.get('date', datetime.now().strftime('%Y-%m-%d'))
-            file_exists = os.path.isfile(db_file)
-            
+            # 【1. 云端仓位与盈亏计算】
+            csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTxwkN9w5AOtcE__HmRKJU7iN088oyEYLdPnWkU6568HzzpIsnhN7x7Z7h5HSKysrkq0s3KKkHirfsO/pub?gid=0&single=true&output=csv"
+            my_cost, my_shares = None, None
             if curr_price and curr_price != 'N/A':
-                with open(db_file, 'a', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    if not file_exists:
-                        writer.writerow(['Date', 'Code', 'ClosePrice'])
-                    writer.writerow([today_str, code, curr_price])
-            
-            if file_exists:
-                df_log = pd.read_csv(db_file)
-                if len(df_log) >= 2:
-                    df_log['Return'] = df_log.groupby('Code')['ClosePrice'].pct_change() * 100
-                    
-                    # 1. 提取全局系统近期胜率 (近5日有效波动)
-                    recent_dates = sorted(df_log['Date'].unique())[-5:]
-                    recent_log = df_log[df_log['Date'].isin(recent_dates)]
-                    valid_returns = recent_log['Return'].dropna()
-                    
-                    if not valid_returns.empty:
-                        wins = valid_returns[valid_returns > 0]
-                        losses = valid_returns[valid_returns <= 0]
-                        
-                        p = len(wins) / len(valid_returns)
-                        system_win_rate = p * 100
-                        
-                        avg_win = wins.mean() if not wins.empty else 2.0
-                        avg_loss = abs(losses.mean()) if not losses.empty else 2.0
-                        b = avg_win / avg_loss if avg_loss > 0 else 1.0
-                        system_odds = b
+                req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as res:
+                    content = res.read().decode('utf-8-sig')
+                    reader = csv.reader(io.StringIO(content))
+                    for row in reader:
+                        if len(row) >= 2 and row[0].strip():
+                            r_code = ''.join(filter(str.isdigit, str(row[0]))).zfill(6)
+                            if r_code == code:
+                                my_cost = float(str(row[1]).replace(',', '').strip())
+                                my_shares = int(float(str(row[2]).replace(',', '').strip())) if len(row) >= 3 and row[2].strip() else 0
+                if my_cost:
+                    context['user_cost'] = my_cost
+                    context['user_shares'] = my_shares
+                    profit_pct = ((float(curr_price) - my_cost) / my_cost) * 100
+                    status_emoji = "🔴套牢中" if profit_pct < 0 else "🟢盈利中"
+                    personal_status_text += f"\n### 💰 我的私人波段持仓 (实时同步)\n* **成本价**：{my_cost:.2f} 元 | **持仓**：{my_shares} 股\n* **当前盈亏**：{profit_pct:.2f}% ({status_emoji})\n* **🚨 操盘指令**：针对此成本，必须在 `ai_real_operation` 中给出波段做T解套或格局冲高的具体操作！\n"
 
-                        # 🎯 凯利公式计算 f = (p * (b + 1) - 1) / b
-                        raw_kelly = (p * (b + 1) - 1) / b if b > 0 else 0
-                        
-                        # 大盘 Beta 风险因子
-                        market_risk_factor = 0.5 if "极度危险" in market_beta_status else 1.0
-                        
-                        if raw_kelly > 0:
-                            # 采用半凯利公式(0.5)，乘上大盘因子，转换为百分比
-                            kelly_suggested_pos = raw_kelly * 0.5 * market_risk_factor * 100
-                            # 单股风控绝对锁死：最高不超过 50%
-                            kelly_suggested_pos = min(kelly_suggested_pos, 50.0)
-                            kelly_desc = f"半凯利理论安全仓位 {kelly_suggested_pos:.1f}% (已叠加Beta因子{market_risk_factor})"
-                        else:
-                            kelly_suggested_pos = 0.0
-                            if p < 0.4:
-                                kelly_desc = "⚠️ 胜率极低(<40%)且期望收益为负，系统强制建议空仓或极轻仓试错(<5%)！"
-                            else:
-                                kelly_desc = "⚠️ 期望收益为负，建议空仓观望保本。"
+            # 【2. 主力内资流向】
+            try:
+                fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
+                latest_flow = fund_flow.iloc[-1]
+                flow_desc = f"主力净流入: {latest_flow['主力净流入-净额']/10000:.1f}万" if latest_flow['主力净流入-净额'] != 0 else "微小"
+                personal_status_text += f"\n### 🌊 聪明钱动向 (内资)\n* **今日资金流**：{flow_desc}\n"
+            except: pass
 
-                        # 将算出的强风控数据存入 context，方便 _parse_response 做最终兜底
-                        context['_kelly_metrics'] = {
-                            'win_rate': system_win_rate,
-                            'odds': system_odds,
-                            'suggested_pos': kelly_suggested_pos,
-                            'desc': kelly_desc
-                        }
-
-                # 2. 针对该股票的多日连贯回测 (近5次推荐记录)
-                df_code = df_log[df_log['Code'] == code].tail(6) # 包含今天
-                evidence_lines = []
-                
-                if len(df_code) >= 2 and curr_price and curr_price != 'N/A':
-                    curr_p = float(curr_price)
-                    
-                    for i in range(len(df_code) - 1):
-                        past_price = float(df_code.iloc[i]['ClosePrice'])
-                        past_date = df_code.iloc[i]['Date']
-                        
-                        period_low = curr_p
-                        try:
-                            if 'date' in df.columns:
-                                period_df = df[df['date'] >= past_date]
-                                if not period_df.empty:
-                                    period_low = period_df['low'].min()
-                        except: pass
-
-                        ai_impact = ((curr_p - past_price) / past_price) * 100
-                        mdd_impact = ((period_low - past_price) / past_price) * 100
-                        
-                        if mdd_impact < -5.0:
-                            status_judge = f"❌ 盘中触损洗盘(最大回撤 {mdd_impact:.2f}%)"
-                        elif ai_impact < 0:
-                            status_judge = f"❌ 最终亏损"
-                        else:
-                            status_judge = f"✅ 成功获利"
-                            
-                        evidence_lines.append(f"[{past_date}分析]: 成本 {past_price:.2f}元 ➔ 今日 {curr_p:.2f}元 | 损益: {ai_impact:.2f}% ({status_judge})")
-
-                    if evidence_lines:
-                        evidence_impact_text = " | ".join(evidence_lines[-3:]) 
-                        context['_evidence_impact'] = evidence_impact_text
-                        
-                        personal_status_text += f"\n### ⚖️ 绩效审判庭与多日连贯风控 (实盘回测)\n"
-                        for line in evidence_lines[-5:]:
-                            personal_status_text += f"* {line}\n"
-                        personal_status_text += f"* **📈 系统近期全局胜率 (近5日)**: {system_win_rate:.1f}% | **近期平均盈亏比**: {system_odds:.2f}\n"
-                        personal_status_text += f"* **🎯 凯利公式量化指令**: {kelly_desc}\n"
-                        personal_status_text += f"* **【认知诊断与凯利风控指令】**：\n  1. Agent C 必须纵览打脸记录进行深度归因诊断。\n  2. 总指挥必须在 `kelly_position_sizing` 中，严格参考上述算出的【半凯利理论仓位：{kelly_suggested_pos:.1f}%】来给出最终建议！绝不能超越这个系统计算的安全边界！\n"
-        except: pass
-
-        usd_cny_desc = "宏观汇率暂稳"
-        try:
-            fx_df = ak.fx_spot_quote()
-            usd_cny = float(fx_df[fx_df['货币对'] == '美元兑人民币']['最新价'].iloc[0])
-            usd_cny_desc = f"美元兑人民币: {usd_cny:.4f} (若破7.25警惕外资流出白马股)"
-        except: pass
-
-        try:
-            fund_flow = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith('6') else "sz")
-            latest_flow = fund_flow.iloc[-1]
-            net_flow = latest_flow['主力净流入-净额']
-            
-            # 🚀 [外挂升级]: 提取超大单与小单，监测散户与主力的博弈背离
-            super_large = latest_flow.get('超大单净流入-净额', 0)
-            retail = latest_flow.get('小单净流入-净额', 0)
-            
-            net_flow_ratio = ""
-            if context.get('computed_amount') and context['computed_amount'] > 0:
-                ratio = (net_flow / context['computed_amount']) * 100
-                if ratio < -10: net_flow_ratio = f" (🚨极度恶劣！占总成交额 {-ratio:.1f}%)"
-                elif ratio > 10: net_flow_ratio = f" (🔥爆买！占总成交额 {ratio:.1f}%)"
-                
-            flow_divergence = ""
-            if super_large < 0 and retail > 0 and abs(super_large) > abs(retail) * 0.5:
-                flow_divergence = "\n  🧨【致命背离:散户接盘主力】超大单疯狂出逃，散户小单竟在净买入！"
-            elif super_large > 0 and retail < 0:
-                flow_divergence = "\n  💎【吸筹背离:主力通吃割肉盘】超大单狂吸，散户小单恐慌抛售！"
-                
-            flow_desc = f"内资主力净流入: {net_flow/10000:.1f}万{net_flow_ratio}{flow_divergence}"
-            
+            # 【3. 深度暗网雷达：北向外资追踪】
             try:
                 hk_funds = ak.stock_hsgt_stock_statistics_em()
                 my_hk = hk_funds[hk_funds['代码'] == code]
                 if not my_hk.empty:
-                    hk_v = my_hk.iloc[0]['今日增持估计-市值']
-                    flow_desc += f" | 北向外资: {'🟢流入' if hk_v > 0 else '🔴出逃'} {abs(hk_v)/10000:.1f}万"
+                    hk_hold = my_hk.iloc[0]['持股比例']
+                    hk_change = my_hk.iloc[0]['今日增持估计-市值']
+                    action_str = "🟢流入" if hk_change > 0 else "🔴砸盘流出"
+                    personal_status_text += f"### 🕵️‍♂️ 外资(北向)追踪\n* **北向资金持股比例**：{hk_hold}%\n* **今日外资动向**：{action_str} {abs(hk_change)/10000:.1f}万元\n"
             except: pass
-            
-            lhb_desc = "无异常榜单"
-            try:
-                lhb = ak.stock_lhb_detail_em(start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
-                if not lhb.empty and code in lhb['代码'].values:
-                    # 🚀 [外挂升级]: 龙虎榜真实买卖净额穿透
-                    my_lhb = lhb[lhb['代码'] == code]
-                    try:
-                        net_amt = my_lhb['买卖净额'].sum()
-                        direction = "流入扫货" if net_amt > 0 else "砸盘出逃"
-                        lhb_desc = f"🔥近5日登榜！顶级游资净{direction} {abs(net_amt)/10000:.1f}万，筹码博弈剧烈！"
-                    except:
-                        lhb_desc = "🔥近5日登榜！发现顶级游资席位运作痕迹，交投极度活跃！"
-            except: pass
-            
-            personal_status_text += f"### 🕵️‍♂️ Agent B 专属雷达：宏观流动性与龙虎榜动向\n* **{usd_cny_desc}**\n* {flow_desc}\n* {lhb_desc}\n"
-        except: pass
 
-        hardcore_radar_text = f"""### 🎯 Agent A 专属雷达：A股深水区技术面 (极重要)
-* 🧭 大盘Beta共振: {market_beta_status}
-* 👁️‍🗨️ 真假摔/洗盘/诱多判定: {washout_status}
-* ⏱️ 竞价缺口与主力态度: {gap_str}
-* 👥 股东户数集中度: {gd_status}
-* 🔥 20日绝对动量(RPS近似): {rps_status}
-* ⚡ 顶底背离雷达: {macd_div}
-* 🩸 OBV 暗盘动向: {obv_status}
-* 🧨 炸板监控: {zhaban_status}
-* 📉 极度缩量监控: {diliang_status}
-* ⏱️ KDJ动量反转: {kdj_status}
-* 🌡️ RSI超买超跌: {rsi_status}
-* ⚖️ 绝对盈亏比测算: {rr_status}
-* 🧱 最大套牢筹码峰 (压力位): 约 {poc_price:.2f}元
-* 🌊 当前所处情绪周期: {emotion_cycle}
-* 🌡️ 情绪温度计: {greed_fear_idx}
+            # 【4. RSI 技术极值与板块共振】
+            try:
+                if 'history' in context:
+                    prices = [d['close'] for d in context['history'][-20:]]
+                    if len(prices) > 6:
+                        delta = pd.Series(prices).diff()
+                        gain = delta.where(delta > 0, 0).rolling(window=6).mean()
+                        loss = -delta.where(delta < 0, 0).rolling(window=6).mean()
+                        rs = gain / loss
+                        rsi6 = 100 - (100 / (1 + rs.iloc[-1]))
+                        personal_status_text += f"\n### 📊 波段技术情绪\n* **6日RSI**：{rsi6:.1f} (若>80则严重超买，易现波段高点)\n"
+                
+                industry_df = ak.stock_board_industry_name_em()
+                top_up = industry_df.head(3)['板块名称'].tolist()
+                top_down = industry_df.tail(3)['板块名称'].tolist()
+                personal_status_text += f"* **今日领涨板块**：{', '.join(top_up)} | **领跌板块**：{', '.join(top_down)}\n"
+            except: pass
+
+            # 【5. AI 波段闭环回测与胜率打脸系统】
+            try:
+                db_file = "reports/ai_trade_log.csv"
+                today_str = today.get('date', datetime.now().strftime('%Y-%m-%d'))
+                file_exists = os.path.isfile(db_file)
+                
+                with open(db_file, 'a', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    if not file_exists: writer.writerow(['Date', 'Code', 'ClosePrice'])
+                    writer.writerow([today_str, code, curr_price])
+                
+                if file_exists:
+                    df_log = pd.read_csv(db_file)
+                    df_code = df_log[df_log['Code'] == code].tail(3)
+                    if len(df_code) >= 2:
+                        past_price = float(df_code.iloc[-2]['ClosePrice'])
+                        past_date = df_code.iloc[-2]['Date']
+                        curr_p = float(curr_price)
+                        ai_impact = ((curr_p - past_price) / past_price) * 100
+                        status_judge = "❌ 波段导致亏损" if ai_impact < 0 else "✅ 波段成功获利"
+                        
+                        evidence_text = f"上次分析时 ({past_date}) 股价：{past_price:.2f}元 ➔ 最新股价：{curr_p:.2f}元 | 区间涨跌：{ai_impact:.2f}% ({status_judge})"
+                        context['_evidence_impact'] = evidence_text
+                        personal_status_text += f"\n### ⚖️ 波段绩效审判庭 (实盘回测)\n* {evidence_text}\n* **【处刑指令】**：如果波段区间涨跌为负，必须在 debate_process 中进行深刻的【波段归因诊断】，并立刻调整为防守模型！\n"
+            except Exception as e:
+                pass
+
+        except Exception as e:
+            logger.error(f"增强引擎加载失败: {e}")
+        # =======================================================
+        # 八边形终极引擎结束
+        # =======================================================
+
+        hardcore_radar_text = f"""### 🎯 Agent A 专属波段雷达
+* 🏆 **波段战法共振探测**：\n{strategy_str}
+* 🧱 **最大套牢筹码峰 (波段阻力位)**：约 {poc_price:.2f}元
 """
-        
         context['_last_personal'] = personal_status_text
         context['_last_radar'] = hardcore_radar_text
-        context['_last_news'] = google_news
 
-        t_close = today.get('close', curr_price)
-        t_open = today.get('open', context.get('computed_open', 'N/A'))
-        t_high = today.get('high', context.get('computed_high', 'N/A'))
-        t_low = today.get('low', context.get('computed_low', 'N/A'))
-        t_pct_chg = today.get('pct_chg', context.get('computed_pct_chg', 'N/A'))
-        t_vol = today.get('volume', context.get('computed_volume'))
-        t_amt = today.get('amount', context.get('computed_amount'))
-        
-        t_ma5 = today.get('ma5') if today.get('ma5') not in [None, 'N/A', ''] else f"{calc_ma5:.2f}"
-        t_ma10 = today.get('ma10') if today.get('ma10') not in [None, 'N/A', ''] else f"{calc_ma10:.2f}"
-        t_ma20 = today.get('ma20') if today.get('ma20') not in [None, 'N/A', ''] else f"{calc_ma20:.2f}"
-        
-        rt_price = rt.get('price', t_close)
-        rt_vr = rt.get('volume_ratio') if rt.get('volume_ratio') not in [None, 'N/A', ''] else f"{calc_vr:.2f}"
-        rt_turnover = rt.get('turnover_rate', 'N/A')
-        
-        trend = context.get('trend_analysis', {})
-        bias_ma5 = trend.get('bias_ma5', 0)
-        if not bias_ma5 and curr_price and calc_ma5:
-            bias_ma5 = (curr_price - calc_ma5) / calc_ma5 * 100
-        bias_warning = "🚨 超过5%，严禁追高！" if float(bias_ma5) > 5 else "✅ 安全范围"
-
-        chip = context.get('chip', {})
-        profit_ratio = chip.get('profit_ratio', syn_profit_ratio / 100)
-
-        prompt = f"""# 决策仪表盘深度多空对抗分析: {stock_name}({code})
+        prompt = f"""# 决策仪表盘深度波段分析: {stock_name}({code})
 
 {personal_status_text}
 {hardcore_radar_text}
 
-## 📊 股票基础信息
-
-| 项目 | 数据 |
-|------|------|
-| 股票代码 | {code} |
-| 股票名称 | {stock_name} |
-| 股票市值风格 | {style_str} |
-| 分析日期 | {context.get('date', '未知')} |
-
----
-
-## 📈 技术面数据 (多空博弈基础)
-
-### 今日行情
-
-| 指标 | 数值 |
-|------|------|
-| 收盘价 | {t_close} 元 |
-| 开盘价 | {t_open} 元 |
-| 最高价 | {t_high} 元 |
-| 最低价 | {t_low} 元 |
-| 涨跌幅 | {t_pct_chg}% |
-| 成交量 | {self._format_volume(t_vol)} |
-| 成交额 | {self._format_amount(t_amt)} |
-
-### 均线系统与量价
-
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| MA5 | {t_ma5} | 短期防守线 |
-| MA10 | {t_ma10} | 中短期趋势 |
-| MA20 | {t_ma20} | 生命周期线 |
-| 均线形态 | {context.get('ma_status', '未知')} | 必须判断是否多头排列 |
-| 量比 | {rt_vr} | {rt.get('volume_ratio_desc', '')} |
-| 换手率 | {rt_turnover}% | 是否异常放量 |
-| 乖离率(MA5) | {float(bias_ma5):+.2f}% | {bias_warning} |
-
-### 筹码分布透视
-
-| 指标 | 数值 | 判定标准 |
-|------|------|----------|
-| 获利比例 | {profit_ratio:.1%} | 70-90%时警惕高位派发 |
-| 筹码状态 | {chip.get('chip_status', cv_status)} | 观察是否单峰密集 |
-
----
-
-## 📰 全球与个股情报双引擎 (Agent B & C 研判基础)
-
+## 📰 全球与个股情报双引擎
 {google_news}
 
-⚠️ 审计与舆情指令：
-1. Agent B 请区分上述信息是“确切政策”还是纯粹诱多的“小作文/传闻”。
-2. Agent C 请排查是否有“商誉减值、解禁、高质押平仓、存贷双高”的暴雷风险！
+请严格输出 JSON 格式决策仪表盘。
 """
-
-        if context.get('data_missing'):
-            prompt += """
-⚠️ 数据缺失警告
-由于接口限制，部分指标获取失败。
-请忽略不合理的 N/A，重点依据【舆情情报】和强算雷达进行分析，严禁编造数据！
-"""
-        if context.get('is_index_etf'):
-            prompt += """
-> ⚠️ 指数/ETF 分析约束：该标的为指数跟踪型 ETF 或市场指数。
-> - 风险分析仅关注：指数走势、跟踪误差、市场流动性
-> - 严禁将基金公司的诉讼、声誉纳入风险警报，不要受个股逻辑干扰！
-"""
-
-        prompt += """
----
-## ✅ 最终输出任务
-
-请输出完整的 JSON 格式决策仪表盘。
-务必生成具体的【集合竞价推演】、【条件单交易脚本】及基于历史胜率的【凯利仓位测算】！绝对禁止在 JSON 的数值字段输出 "N/A" 或空值，如果缺少数据，请你依据常识或上下文预估一个安全的数值。"""
-
         return prompt
 
     def _format_volume(self, volume: Optional[float]) -> str:
@@ -962,10 +518,7 @@ class GeminiAnalyzer:
             try: change_amount = float(close_p) - float(prev_close)
             except: pass
             
-        source_val = rt.get('source', '量化推算引擎')
-        source_str = getattr(source_val, 'value', source_val)
-        if str(source_str).strip().upper() in ['N/A', 'NONE', '']:
-            source_str = '量化推算引擎'
+        source_str = '量化推算引擎'
 
         return {
             "date": context.get('date', '未知'),
@@ -1006,9 +559,6 @@ class GeminiAnalyzer:
             dash = d.get('dashboard'); 
             if not isinstance(dash, dict): dash = {}; d['dashboard'] = dash
             
-            dp = dash.get('data_perspective'); 
-            if not isinstance(dp, dict): dp = {}; dash['data_perspective'] = dp
-            
             bp = dash.get('battle_plan'); 
             if not isinstance(bp, dict): bp = {}; dash['battle_plan'] = bp
             
@@ -1017,6 +567,9 @@ class GeminiAnalyzer:
             
             debate = d.get('debate_process'); 
             if not isinstance(debate, dict): debate = {}; d['debate_process'] = debate
+            
+            dp = dash.get('data_perspective'); 
+            if not isinstance(dp, dict): dp = {}; dash['data_perspective'] = dp
             
             pp = dp.get('price_position'); 
             if not isinstance(pp, dict): pp = {}; dp['price_position'] = pp
@@ -1034,7 +587,7 @@ class GeminiAnalyzer:
                 if _is_empty_or_na(pp.get('ma5')): pp['ma5'] = f"{context.get('calc_ma5', 0):.2f}"
                 if _is_empty_or_na(pp.get('ma10')): pp['ma10'] = f"{context.get('calc_ma10', 0):.2f}"
                 if _is_empty_or_na(pp.get('ma20')): pp['ma20'] = f"{context.get('calc_ma20', 0):.2f}"
-                if _is_empty_or_na(pp.get('support_level')): pp['support_level'] = f"{context.get('calc_ma10', 0):.2f}元" 
+                if _is_empty_or_na(pp.get('support_level')): pp['support_level'] = f"{context.get('calc_ma20', 0):.2f}元" 
                 if _is_empty_or_na(pp.get('resistance_level')): pp['resistance_level'] = f"{context.get('calc_poc', 0):.2f}元" 
                 if _is_empty_or_na(va.get('volume_ratio')): va['volume_ratio'] = f"{context.get('calc_vr', 1.0):.2f}"
                 
@@ -1048,9 +601,9 @@ class GeminiAnalyzer:
 
                 if _is_empty_or_na(sp.get('take_profit')):
                     calc_poc = context.get('calc_poc', 0.0)
-                    sp['take_profit'] = f"{calc_poc:.2f}元" if calc_poc > 0 else "逢高止盈"
+                    sp['take_profit'] = f"{calc_poc:.2f}元" if calc_poc > 0 else "波段冲高止盈"
                 else:
-                    sp['take_profit'] = _clean_n_a(sp['take_profit']) or "逢高止盈"
+                    sp['take_profit'] = _clean_n_a(sp['take_profit']) or "波段冲高止盈"
                     
                 if _is_empty_or_na(sp.get('ideal_buy')):
                     sp['ideal_buy'] = f"{context.get('computed_close', 0.0):.2f}元"
@@ -1061,16 +614,6 @@ class GeminiAnalyzer:
                     sp['secondary_buy'] = f"{context.get('calc_ma10', 0.0):.2f}元"
                 else:
                     sp['secondary_buy'] = _clean_n_a(sp['secondary_buy']) or f"{context.get('calc_ma10', 0.0):.2f}元"
-
-                # 🛡️ 凯利公式强制兜底拦截：确保 AI 遵守系统的强算红线
-                kelly_text = str(ps.get('kelly_position_sizing', ''))
-                if '_kelly_metrics' in context:
-                    m = context['_kelly_metrics']
-                    prefix = f"【系统强算风控: 建议最高 {m['suggested_pos']:.1f}%】"
-                    if _is_empty_or_na(kelly_text):
-                        ps['kelly_position_sizing'] = f"{prefix} {m['desc']}"
-                    elif "系统强算" not in kelly_text:
-                        ps['kelly_position_sizing'] = f"{prefix} AI结合建议: {kelly_text}"
 
             # =======================================================
             # 🛡️ 降维寄生补丁：把所有核武级数据无损寄生到基础文本中！
@@ -1085,29 +628,27 @@ class GeminiAnalyzer:
             fin_audit = intel.get('financial_audit', '')
             
             flattened_points = ""
-            
             evidence = context.get('_evidence_impact', '')
-            if evidence:
-                flattened_points += f" [审判铁证]: {evidence}"
+            if evidence: flattened_points += f" [波段审判铁证]: {evidence}"
             
             def clean_text(t):
                 if _is_empty_or_na(t) or "..." in t: return ""
                 return str(t).replace('\n', ' ').replace('\r', '').replace('**', '').replace('*', '')
 
             op_cl = clean_text(ai_real_op)
-            if op_cl: flattened_points += f" [实盘决策]: {op_cl}"
+            if op_cl: flattened_points += f" [波段操作]: {op_cl}"
             
             kelly_cl = clean_text(kelly_pos)
             if kelly_cl: flattened_points += f" [凯利仓位]: {kelly_cl}"
             
             auc_cl = clean_text(auc_script)
-            if auc_cl: flattened_points += f" [明日竞价推演]: {auc_cl}"
+            if auc_cl: flattened_points += f" [波段推演]: {auc_cl}"
 
             cond_cl = clean_text(cond_script)
-            if cond_cl: flattened_points += f" [盘中挂单]: {cond_cl}"
+            if cond_cl: flattened_points += f" [条件挂单]: {cond_cl}"
             
             bias_cl = clean_text(cog_bias)
-            if bias_cl: flattened_points += f" [多日归因诊断]: {bias_cl}"
+            if bias_cl: flattened_points += f" [归因诊断]: {bias_cl}"
             
             bull_cl = clean_text(bull_agent)
             if bull_cl: flattened_points += f" [多头意见]: {bull_cl}"
@@ -1123,7 +664,7 @@ class GeminiAnalyzer:
                 old_one_sentence = cc.get('one_sentence', '')
                 cc['one_sentence'] = old_one_sentence + "\n\n🤖 联合战报 ➔" + flattened_points
 
-            d['key_points'] = "详情请阅上方联合战报及多日回测风控清单"
+            d['key_points'] = "详情请阅上方联合战报及风控清单"
 
             fixed_json_str = json.dumps(d, ensure_ascii=False)
 
@@ -1144,8 +685,7 @@ class GeminiAnalyzer:
                 debate_process=debate, dashboard=dash,
                 analysis_summary=d.get('analysis_summary', '完成'), 
                 key_points=d.get('key_points', '详情请阅上方联合战报'),
-                success=True, 
-                raw_response=fixed_json_str 
+                success=True, raw_response=fixed_json_str 
             )
         except Exception as e:
             logger.warning(f"JSON 解析失败: {e}，触发纯文本兜底解析")
@@ -1169,26 +709,14 @@ class GeminiAnalyzer:
             decision_type=decision_type, confidence_level='低', 
             analysis_summary=response_text[:500] if response_text else 'API已触发限流或出现异常，未能生成有效分析，建议观望。', 
             key_points='API调用受限，触发安全模式。', 
-            risk_warning='建议查阅原始文本。', 
-            raw_response=response_text, success=True
+            risk_warning='建议查阅原始文本。', raw_response=response_text, success=True
         )
 
-    def batch_analyze(self, contexts: List[Dict[str, Any]], delay_between: float = 2.0, max_workers: int = 3) -> List[AnalysisResult]:
-        import concurrent.futures
-        import random
-        
-        # 🚀 [外挂升级]: 引入多线程并发引擎，提速批量分析过程
-        def _analyze_with_delay(idx_ctx):
-            idx, ctx = idx_ctx
-            if idx > 0:
-                # 随机防封抖动：避免瞬间请求爆发被 API 服务商熔断 (429 Too Many Requests)
-                time.sleep(random.uniform(delay_between * 0.5, delay_between * 1.5))
-            return self.analyze(ctx)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 使用 map 保证返回结果数组的顺序与输入的自选股列表顺序严格一致
-            results = list(executor.map(_analyze_with_delay, enumerate(contexts)))
-            
+    def batch_analyze(self, contexts: List[Dict[str, Any]], delay_between: float = 2.0) -> List[AnalysisResult]:
+        results = []
+        for i, context in enumerate(contexts):
+            if i > 0: time.sleep(delay_between)
+            results.append(self.analyze(context))
         return results
 
 def get_analyzer() -> GeminiAnalyzer:
