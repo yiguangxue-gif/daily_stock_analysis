@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 神级赛马轮动引擎 (12个月长期回测版)
+A股游资量化选股雷达 - 5日波段神级赛马引擎 (长期回测版)
 ===================================
 
-核心重构 (长周期动态轮动系统):
-1. 【四大神级战法内置】：龙头首阴、主升突破、冰点反核、机构老鸭头。
-2. 【12个月极致赛马】：每天扫描时，同时对这4个策略进行过去 250 个交易日（约12个月）的矩阵模拟回测！
-3. 【极速引擎】：废除耗时的 for 循环，采用 Pandas 纯向量化矩阵运算，3万次切片回测仅需数秒！
-4. 【胜者为王】：自动挑选近1年【胜率*收益率】最高的最强策略，穿越牛熊，作为今日唯一选股标准！
+核心重构 (5日波段轮动系统):
+1. 【四大波段战法】：趋势低吸、底部起爆、强庄首阴、均线粘合。
+2. 【12个月波段赛马】：回测过去 250 天，按“买入后死拿5天”的规则测算胜率和收益。
+3. 【冲高探测】：计算买入后 5 天内的“期间最大涨幅”，辅助制定止盈策略。
 """
 
 import os
@@ -104,7 +103,7 @@ class ReboundScreener:
                 return pd.DataFrame()
 
     def _get_daily_kline(self, code):
-        # 动态拉取过去 400 天的数据，以确保有足够的交易日进行 250天(12个月) 的回测
+        # 动态拉取过去 400 天的数据，以确保有足够的交易日进行 250天的回测
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
         try:
             return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=1, symbol=code, period="daily", start_date=start_date, adjust="qfq")
@@ -155,7 +154,7 @@ class ReboundScreener:
         except: pass
 
     def calculate_technical_indicators(self, hist):
-        """计算四大神级战法所需的所有深度技术指标"""
+        """计算四大神级波段战法所需的技术指标"""
         df = hist.copy()
         for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
             df[c] = pd.to_numeric(df[c], errors='coerce')
@@ -166,86 +165,70 @@ class ReboundScreener:
         df['MA5'] = df['收盘'].rolling(5).mean()
         df['MA10'] = df['收盘'].rolling(10).mean()
         df['MA20'] = df['收盘'].rolling(20).mean()
-        df['MA30'] = df['收盘'].rolling(30).mean()
+        df['MA60'] = df['收盘'].rolling(60).mean()
         df['Vol_MA5'] = df['成交量'].rolling(5).mean()
         
-        # MACD
-        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
-        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
-        df['MACD_DIF'] = exp1 - exp2
-        df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
-        df['MACD'] = 2 * (df['MACD_DIF'] - df['MACD_DEA'])
-        
-        # RSI (6日)
-        delta = df['收盘'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
-        rs = gain / loss
-        df['RSI6'] = 100 - (100 / (1 + rs))
-        
-        # 乖离率 Bias (20日)
+        # 乖离率 Bias
         df['BIAS20'] = (df['收盘'] - df['MA20']) / df['MA20'] * 100
         
-        # 前期最高价 (用于突破)
-        df['High_20d_shift'] = df['最高'].shift(1).rolling(20).max()
-        # 前期最大涨幅 (用于强庄基因)
+        # 10日最大涨幅 (用于抓强庄)
         df['Max_Pct_10d'] = df['涨跌幅'].rolling(10).max()
         
         # 实体与上影线
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
 
-        # 预测次日开盘价 (回测用: 买入T日的收盘价，以T+1日的开盘价卖出)
-        df['Next_Open'] = df['开盘'].shift(-1)
+        # 🚀 核心改动：测算 5 日波段收益
+        # 第 5 天的收盘价
+        df['Close_T5'] = df['收盘'].shift(-5)
+        # 未来 5 天内的最高价 (T+1 到 T+5)
+        df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
         
         return df
 
     def evaluate_strategies(self, df):
         """
-        🚀 四大神级战法信号生成引擎 (向量化运算，极速)
+        🚀 四大神级波段战法 (适合持仓 3-5 天的逻辑)
         """
-        # 战法A: 龙头首阴 (强庄缩量回踩，震荡市之王)
-        sA_gene = df['Max_Pct_10d'] > 7.0
-        sA_pct = (df['涨跌幅'] >= -5.0) & (df['涨跌幅'] <= 1.0)
-        sA_vol = df['成交量'] < (df['Vol_MA5'] * 0.8)
-        sA_support = ((abs(df['收盘'] - df['MA10']) / df['MA10']) <= 0.03) | ((abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03)
-        sA_trend = df['收盘'] > df['MA30']
-        df['Sig_A_Pullback'] = sA_gene & sA_pct & sA_vol & sA_support & sA_trend
+        # 战法A: 趋势低吸 (均线多头，缩量回踩MA20)
+        sA_trend = df['MA20'] > df['MA60']
+        sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
+        sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
+        df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol
 
-        # 战法B: 主升突破 (巨量突破平台，高潮市印钞机)
-        sB_break = df['收盘'] > df['High_20d_shift']
-        sB_pct = (df['涨跌幅'] >= 4.0) & (df['涨跌幅'] <= 9.5) # 大阳但非一字板
-        sB_vol = df['成交量'] > (df['Vol_MA5'] * 1.8) # 近乎两倍量
-        sB_ma = (df['MA5'] > df['MA10']) & (df['MA10'] > df['MA20'])
-        df['Sig_B_Breakout'] = sB_break & sB_pct & sB_vol & sB_ma
+        # 战法B: 底部起爆 (长期在半年线下方，今日两倍量突破MA60)
+        sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
+        sB_break = df['收盘'] > df['MA60']
+        sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
+        sB_pct = df['涨跌幅'] > 4.0
+        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct
 
-        # 战法C: 冰点反核 (极度偏离超跌反弹，股灾救星)
-        sC_bias = df['BIAS20'] < -12.0 # 严重超跌
-        sC_rsi = df['RSI6'] < 25.0 # 情绪极度冰点
-        sC_pct = (df['涨跌幅'] > 0.0) & (df['涨跌幅'] < 3.0) # 探底回升收红
-        sC_vol = df['成交量'] < df['Vol_MA5'] # 抛压枯竭
-        df['Sig_C_Oversold'] = sC_bias & sC_rsi & sC_pct & sC_vol
+        # 战法C: 强庄首阴 (10天内有涨停或>8%大阳，今日缩量收阴)
+        sC_gene = df['Max_Pct_10d'] > 8.0
+        sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
+        sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol
 
-        # 战法D: 机构老鸭头 (均线多头慢涨，慢牛必选)
-        sD_ma = (df['MA5'] > df['MA10']) & (df['MA10'] > df['MA20']) & (df['MA20'] > df['MA30'])
-        sD_macd = df['MACD'] > 0
-        sD_pct = (df['涨跌幅'] >= 1.0) & (df['涨跌幅'] <= 4.0) # 温和上涨
-        sD_shadow = df['Upper_Shadow'] < df['Body'] * 0.5 # 无抛压
-        df['Sig_D_Trend'] = sD_ma & sD_macd & sD_pct & sD_shadow
+        # 战法D: 均线粘合向上 (MA5,10,20纠缠后一阳穿三线)
+        ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
+        ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
+        sD_squeeze = (ma_max - ma_min) / ma_min < 0.03 # 极度粘合
+        sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 3.0)
+        df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up
         
         return df
 
     def ai_select_top5(self, candidates, macro_news, best_strategy_name, strategy_reason):
-        logger.info(f"🧠 正在唤醒 AI 执行今日长周期常青冠军策略: 【{best_strategy_name}】")
+        logger.info(f"🧠 正在唤醒 AI 执行今日长周期波段冠军策略: 【{best_strategy_name}】")
         if not self.config.gemini_api_key: return {"top_5": []}
 
         past_lessons = self.load_ai_lessons()
         cand_text = ""
         for c in candidates:
-            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 量比:{c['量比']}\n"
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨跌幅:{c['今日涨幅']} | 量比:{c['量比']}\n"
 
         prompt = f"""你是一位A股神级游资总舵主。
-根据我们量化系统的【12个月（近250个交易日）全景赛马回测】，穿越牛熊脱颖而出、近期市场上最赚钱、胜率最高的冠军策略是：【{best_strategy_name}】！
+根据我们量化系统的【12个月/250日波段赛马回测】，近期市场上最赚钱、5日波段胜率最高的冠军策略是：【{best_strategy_name}】！
 冠军策略的登顶理由是：{strategy_reason}。
 
 这证明该战法是经受住了时间考验的“常青树”。我已使用该战法为你筛选出以下【今日完美备选池】！
@@ -261,25 +244,25 @@ class ReboundScreener:
 
 ### 🎯 你的任务：
 1. 必须输出不多不少恰好 5 只股票！(若不足5只，则有几只选几只)
-2. `reason` 中说明它为什么完美契合【{best_strategy_name}】的买入逻辑。
-3. `target_price` 设定为次日冲高兑现位，`stop_loss` 设定为严苛的止损位。
-4. 根据当前长周期冠军策略的登顶，提取一条大局观教训填入 `new_lesson_learned`！
+2. 这次我们的操作模式是【波段操作】，买入后持仓观察 3-5 天寻找轮动大阳线！
+3. `reason` 中说明它为什么完美契合该策略的波段买入逻辑。
+4. `target_price` 设定为未来 5 天内的波段冲高目标价，`stop_loss` 设定为波段防守破位价。
 
 请严格输出 JSON 格式：
 ```json
 {{
-    "ai_reflection": "对大盘为何在长周期契合该冠军策略的深度洞察...",
+    "ai_reflection": "对大盘为何在长周期契合该波段策略的深度洞察...",
     "new_lesson_learned": "提取的新避坑/顺势铁律(无则填：无)",
-    "macro_view": "大盘明日早盘推演...",
+    "macro_view": "大盘未来一周情绪推演...",
     "top_5": [
         {{
             "code": "代码",
             "name": "名称",
             "strategy": "原样保留",
             "current_price": 现价,
-            "reason": "入选逻辑（50字左右，必须贴合冠军策略逻辑）",
-            "target_price": "明日目标价",
-            "stop_loss": "止损价"
+            "reason": "入选逻辑（50字左右，必须贴合波段持仓逻辑）",
+            "target_price": "波段冲高目标价",
+            "stop_loss": "破位止损价"
         }}
     ]
 }}
@@ -296,7 +279,7 @@ class ReboundScreener:
         except Exception: return None
 
     def send_email_report(self, ai_data, tournament_stats, best_strategy_name, target_count):
-        logger.info("📧 正在生成赛马战报邮件...")
+        logger.info("📧 正在生成波段赛马战报邮件...")
         sender = self.config.email_sender
         pwd = self.config.email_password
         receivers = self.config.email_receivers or [sender]
@@ -306,33 +289,37 @@ class ReboundScreener:
         
         # 构造赛马榜单 HTML
         tournament_html = f"""
-        <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #e74c3c; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #c0392b;">🏇 量化轮动赛马榜 (近12个月/250交易日 大数据回测)</h3>
+        <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 5日波段轮动赛马榜 (近250交易日 大数据回测)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
-                    <th>战法名称</th><th>长周期触发次数</th><th>隔夜胜率</th><th>平均单笔收益</th><th>穿越牛熊评级</th>
+                    <th>战法名称</th><th>回测触发次数</th><th>5日后胜率</th><th>5日平均收益</th><th>5日内平均最大冲高</th>
                 </tr>
         """
         
         for s_name, stats in tournament_stats.items():
-            win_rate = stats['wins']/stats['trades']*100 if stats['trades']>0 else 0
-            avg_ret = sum(stats['returns'])/len(stats['returns']) if stats['returns'] else 0
+            trades = stats['trades']
+            win_rate = stats['wins'] / trades * 100 if trades > 0 else 0
+            avg_ret = sum(stats['returns']) / trades if trades > 0 else 0
+            avg_max = sum(stats['max_gains']) / trades if trades > 0 else 0
             
             if s_name == best_strategy_name:
                 row_style = "background-color: #fff3cd; font-weight: bold; color: #d35400;"
-                medal = "🏆 [全年总冠军]"
+                medal = "🏆 [总冠军]"
             else:
                 row_style = ""
                 medal = ""
                 
-            color = "red" if avg_ret > 0 else "green"
+            color_ret = "red" if avg_ret > 0 else "green"
+            color_max = "red" if avg_max > 0 else "black"
+            
             tournament_html += f"""
                 <tr style="{row_style}">
                     <td>{s_name} {medal}</td>
-                    <td>{stats['trades']}次</td>
+                    <td>{trades}次</td>
                     <td>{win_rate:.1f}%</td>
-                    <td style="color: {color};">{avg_ret:+.2f}%</td>
-                    <td>{"⭐⭐⭐⭐⭐ 部署" if win_rate > 55 else "⭐⭐ 谨慎"}</td>
+                    <td style="color: {color_ret};">{avg_ret:+.2f}%</td>
+                    <td style="color: {color_max}; font-weight: bold;">{avg_max:+.2f}%</td>
                 </tr>
             """
         tournament_html += "</table></div>"
@@ -340,17 +327,17 @@ class ReboundScreener:
         top5_html = ""
         if ai_data and "top_5" in ai_data and len(ai_data["top_5"]) > 0:
             top5_html += f"""
-            <h3>🧠 总舵主长线定调日记</h3>
+            <h3>🧠 总舵主波段定调日记</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
                 <p><b>🔄 赛马归因：</b>{ai_data.get('ai_reflection', '无')}</p>
-                <p><b>🔴 常青铁律：</b><span style="color:red; font-weight:bold;">{ai_data.get('new_lesson_learned', '无')}</span></p>
+                <p><b>🔴 波段铁律：</b><span style="color:red; font-weight:bold;">{ai_data.get('new_lesson_learned', '无')}</span></p>
                 <p><b>🌍 情绪支持：</b>{ai_data.get('macro_view', '无')}</p>
             </div>
             
-            <h3>🎯 冠军策略选股池 (共 {target_count} 只，严格执行【{best_strategy_name}】纪律)</h3>
+            <h3>🎯 冠军策略选股池 (共 {target_count} 只，严格执行【{best_strategy_name}】)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #2c3e50; color: #ffffff;">
-                    <th>代码</th><th>名称</th><th>量化策略标识</th><th>现价</th><th>早盘操作计划</th><th>核心逻辑</th>
+                    <th>代码</th><th>名称</th><th>量化策略标识</th><th>现价</th><th>波段操作计划</th><th>核心逻辑</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
@@ -360,7 +347,7 @@ class ReboundScreener:
                     <td><b>{s.get('name', '')}</b></td>
                     <td><span style="background:#e8f4f8; color:#2980b9; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 12px;">{s.get('strategy', '未定义')}</span></td>
                     <td>{s.get('current_price', '')}</td>
-                    <td style="font-size: 13px;">🚀 卖: {s.get('target_price', '')}<br>🛑 损: {s.get('stop_loss', '')}</td>
+                    <td style="font-size: 13px;">🚀 目标: {s.get('target_price', '')}<br>🛑 防守: {s.get('stop_loss', '')}</td>
                     <td style="font-size: 13px;">{s.get('reason', '')}</td>
                 </tr>
                 """
@@ -371,19 +358,19 @@ class ReboundScreener:
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股神级赛马雷达：12个月全景回测轮动 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股神级赛马雷达：5日波段潜伏精选 ({today_str})</h2>
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：系统已对市场进行了长达一年的兵棋推演，为你选出穿越牛熊的冠军战法。尾盘潜伏，次日早盘集合竞价借势兑现！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：尾盘买入潜伏，持有观察 3-5 个交易日。期间一旦达到【平均最大冲高】利润，果断落袋为安，绝不恋战！</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【12月度大数据赛马】今日常青树战法：{best_strategy_name} - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【5日波段赛马引擎】今日冠军战法：{best_strategy_name} - {today_str}", 'utf-8')
         
-        sender_name = self.config.email_sender_name or "大数据赛马系统"
+        sender_name = self.config.email_sender_name or "大数据波段系统"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
         msg['To'] = ", ".join(receivers)
         msg.attach(MIMEText(html_content, 'html'))
@@ -413,7 +400,7 @@ class ReboundScreener:
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【四路诸侯·12个月长周期大数据轮动引擎】 ==========")
+        logger.info("========== 启动【5日波段潜伏·四路诸侯赛马引擎】 ==========")
         
         df = self.get_market_spot()
         if df.empty: return
@@ -437,35 +424,32 @@ class ReboundScreener:
         df = df[df['close'] >= 2.0] 
         
         if df['circ_mv'].sum() > 0:
-            df = df[(df['circ_mv'] >= 50_0000_0000) & (df['circ_mv'] <= 500_0000_0000)]
+            df = df[(df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 500_0000_0000)]
         df = df[df['amount'] >= 200000000]
         
         candidates = df.sort_values(by='amount', ascending=False).head(150)
-        logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动四大战法极速矩阵推演...")
+        logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动四大波段战法极速矩阵推演...")
 
-        # 赛马统计看板
+        # 赛马统计看板 (新增 max_gains 期间最大涨幅记录)
         tournament_stats = {
-            '战法A: 龙头首阴': {'trades': 0, 'wins': 0, 'returns': []},
-            '战法B: 主升突破': {'trades': 0, 'wins': 0, 'returns': []},
-            '战法C: 冰点反核': {'trades': 0, 'wins': 0, 'returns': []},
-            '战法D: 机构趋势': {'trades': 0, 'wins': 0, 'returns': []}
+            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
+            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
+            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
+            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []}
         }
         
         today_signals = {} 
         
         total_c = len(candidates)
-        # ==========================================
-        # 🚀 震撼升级：回测周期拉满至 250 天 (约 12 个月)
-        # ==========================================
+        # 250 个交易日回测
         lookback_days = 250
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
-            if i % 30 == 0: logger.info(f"⏳ 12个月大数据赛马矩阵推演中... 进度: {i} / {total_c}")
+            if i % 30 == 0: logger.info(f"⏳ 12个月大数据矩阵推演中... 进度: {i} / {total_c}")
                 
             code = row['code']
             name = row['name']
             try:
-                # 刚才在 _get_daily_kline 中已经把拉取范围扩大到了 400 天前
                 df_kline = self._get_daily_kline(code)
                 if df_kline is None or len(df_kline) < 60: continue
                 
@@ -473,34 +457,41 @@ class ReboundScreener:
                 sig_df = self.evaluate_strategies(tech_df)
                 
                 # ==========================================
-                # 🚀 引入极速矩阵运算：瞬间测算 250 个交易日的所有收益
-                # 抛弃缓慢的 for iterrows 循环，性能提升 100 倍！
+                # 🚀 引入 5日波段收益 矩阵运算
                 # ==========================================
-                # 动态获取股票实际有的天数（次新股可能不足250天，我们就测它上市以来的所有数据）
-                actual_lookback = min(lookback_days, len(sig_df) - 35)
-                if actual_lookback < 10: continue # 历史太短的次新股不参与长周期回测
+                # 计算这只股票在过去 1 年中，每笔交易满 5 天后的表现
+                actual_lookback = min(lookback_days, len(sig_df) - 60)
+                if actual_lookback < 10: continue 
                 
-                test_df = sig_df.iloc[-(actual_lookback+1):-1].copy()
-                # 矩阵化计算这只股票在过去 1 年中，每一天的“次日开盘卖出”的隔夜收益率
-                test_df['Ret_Pct'] = ((test_df['Next_Open'] - test_df['收盘']) / test_df['收盘'] - 0.0015) * 100
+                # 截取可以进行“未来5日推演”的有效区间 (排除最后5天，因为没走完)
+                test_df = sig_df.iloc[-(actual_lookback+5):-5].copy()
                 
-                # 分发成绩给四个战法
+                # 计算 5日后收盘卖出的真实收益 (扣除 0.3% 的买卖双边摩擦成本)
+                test_df['Ret_5D'] = ((test_df['Close_T5'] - test_df['收盘']) / test_df['收盘'] - 0.003) * 100
+                
+                # 计算买入后 5 天内的最大冲高涨幅 (告诉用户理论上能赚多少)
+                test_df['Max_Gain'] = ((test_df['High_5D'] - test_df['收盘']) / test_df['收盘']) * 100
+                
                 strategy_keys = [
-                    ('战法A: 龙头首阴', 'Sig_A_Pullback'), 
-                    ('战法B: 主升突破', 'Sig_B_Breakout'), 
-                    ('战法C: 冰点反核', 'Sig_C_Oversold'), 
-                    ('战法D: 机构趋势', 'Sig_D_Trend')
+                    ('战法A: 趋势低吸', 'Sig_A_Trend_Pullback'), 
+                    ('战法B: 底部起爆', 'Sig_B_Bottom_Breakout'), 
+                    ('战法C: 强庄首阴', 'Sig_C_Strong_Dip'), 
+                    ('战法D: 均线粘合', 'Sig_D_MA_Squeeze')
                 ]
                 
                 for s_key, col_name in strategy_keys:
-                    valid_rets = test_df[test_df[col_name]]['Ret_Pct']
-                    if not valid_rets.empty:
-                        tournament_stats[s_key]['trades'] += len(valid_rets)
-                        tournament_stats[s_key]['returns'].extend(valid_rets.tolist())
-                        tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
+                    trades = test_df[test_df[col_name]]
+                    if not trades.empty:
+                        valid_rets = trades['Ret_5D'].dropna()
+                        valid_maxs = trades['Max_Gain'].dropna()
+                        if not valid_rets.empty:
+                            tournament_stats[s_key]['trades'] += len(valid_rets)
+                            tournament_stats[s_key]['returns'].extend(valid_rets.tolist())
+                            tournament_stats[s_key]['max_gains'].extend(valid_maxs.tolist())
+                            tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
                 
                 # ==========================================
-                # 2. 收集今日各战法触发情况
+                # 2. 收集今日触发情况
                 # ==========================================
                 last = sig_df.iloc[-1]
                 v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
@@ -511,18 +502,18 @@ class ReboundScreener:
                     'pct': row['pct_chg'],
                     'amount': row['amount'],
                     'v_ratio': v_ratio,
-                    'sig_A': last['Sig_A_Pullback'],
-                    'sig_B': last['Sig_B_Breakout'],
-                    'sig_C': last['Sig_C_Oversold'],
-                    'sig_D': last['Sig_D_Trend']
+                    'sig_A': last['Sig_A_Trend_Pullback'],
+                    'sig_B': last['Sig_B_Bottom_Breakout'],
+                    'sig_C': last['Sig_C_Strong_Dip'],
+                    'sig_D': last['Sig_D_MA_Squeeze']
                 }
-                time.sleep(random.uniform(0.05, 0.1)) # 降低休眠提升扫盘速度
+                time.sleep(random.uniform(0.05, 0.1))
                 
             except Exception:
                 continue
 
         # =========================================================
-        # 🏆 结算赛马结果，挑选12月度“常青冠军策略”
+        # 🏆 结算赛马结果，挑选12月度“波段冠军策略”
         # =========================================================
         best_strategy = None
         best_score = -9999
@@ -530,32 +521,34 @@ class ReboundScreener:
         
         for s_name, stats in tournament_stats.items():
             trades = stats['trades']
-            if trades >= 10: # 过去12个月至少触发10次，具备统计学意义
+            if trades >= 10: 
                 win_rate = stats['wins'] / trades
                 avg_ret = sum(stats['returns']) / trades
-                # 核心评分公式：胜率 * 平均收益
+                avg_max = sum(stats['max_gains']) / trades
+                
+                # 波段评分：胜率 * 平均收益 (如果平均收益是负的，这个策略直接出局)
                 score = win_rate * avg_ret
                 if score > best_score:
                     best_score = score
                     best_strategy = s_name
-                    best_reason = f"穿越牛熊！近12个月触发{trades}次，稳健胜率{win_rate*100:.1f}%，平均单笔隔夜收益{avg_ret:+.2f}%！"
+                    best_reason = f"穿越牛熊！近12个月触发{trades}次，持仓5天胜率达{win_rate*100:.1f}%，5天内平均最大冲高利润高达{avg_max:+.2f}%！"
         
         if best_strategy is None or best_score < 0:
-            logger.warning("🚨 极致地狱模式！四大战法在过去一年里居然全亏，强制开启【冰点防守】模式！")
-            best_strategy = '战法C: 冰点反核'
-            best_reason = "12个月历史大数据显示所有进攻策略均失效，强行切入超跌反核防御模型寻找绝对安全垫。"
+            logger.warning("🚨 极致地狱模式！四大波段战法全部失效，强制开启防守。")
+            best_strategy = '战法C: 强庄首阴'
+            best_reason = "12个月历史大数据显示波段策略均艰难，强行切入强庄跌停首阴防守模型。"
 
-        logger.info(f"🏆 今日加冕年度常青树策略: 【{best_strategy}】 ({best_reason})")
+        logger.info(f"🏆 今日加冕年度波段树策略: 【{best_strategy}】 ({best_reason})")
 
         # =========================================================
-        # 🎯 用年度冠军策略筛选今日标的
+        # 🎯 用波段冠军策略筛选今日标的
         # =========================================================
         final_pool = []
         sig_map = {
-            '战法A: 龙头首阴': 'sig_A',
-            '战法B: 主升突破': 'sig_B',
-            '战法C: 冰点反核': 'sig_C',
-            '战法D: 机构趋势': 'sig_D'
+            '战法A: 趋势低吸': 'sig_A',
+            '战法B: 底部起爆': 'sig_B',
+            '战法C: 强庄首阴': 'sig_C',
+            '战法D: 均线粘合': 'sig_D'
         }
         target_sig_key = sig_map[best_strategy]
 
