@@ -1,13 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - AI 自进化闭环 (内嵌 10日动态回测 终极版)
+A股游资量化选股雷达 - AI 自进化闭环 (强庄首阴低吸 + 内嵌回测修复版)
 ===================================
-
-核心重构：
-1. 【内嵌动态回测】：在每天选股的同时，利用已拉取的K线顺手回测过去10天的实战胜率，绝不增加API负担！
-2. 【策略锁定】：强庄缩量回踩低吸（左侧买入，次日开盘砸盘卖出）。
-3. 【数据防封】：双引擎（Tushare + 东财 + 新浪）切换，过滤超级大盘股。
 """
 
 import os
@@ -172,21 +167,15 @@ class ReboundScreener:
         return df
 
     def _run_embedded_backtest(self, tech_df, lookback_days=10):
-        """
-        🚀 核心外挂：内嵌动态回测！
-        利用已经下载好的K线数据，强行推演过去 10 天如果按此策略买入，次日开盘卖出的真实收益。
-        """
         if len(tech_df) < 30: return []
         
         df = tech_df.copy()
-        df['Next_Open'] = df['开盘'].shift(-1) # 获取次日开盘价用于卖出
+        df['Next_Open'] = df['开盘'].shift(-1)
         
-        # 截取过去10天（不包含今天，因为今天还没收盘没法验证次日）
         test_df = df.iloc[-(lookback_days+1):-1] 
         
         returns = []
         for _, row in test_df.iterrows():
-            # 严格套用现在的策略条件
             gene = row['Max_Pct_10d'] > 7.0
             pct = -5.0 <= row['涨跌幅'] <= 1.5
             vol = row['成交量'] < (row['Vol_MA5'] * 0.8)
@@ -195,9 +184,7 @@ class ReboundScreener:
             support = ma10_support or ma20_support
             trend = row['收盘'] > row['MA30']
             
-            # 如果某天满足了买入条件
             if gene and pct and vol and support and trend:
-                # 算隔夜收益: (次日开盘价 - 今日收盘价) / 今日收盘价 - 千分之1.5手续费
                 ret = (row['Next_Open'] - row['收盘']) / row['收盘'] - 0.0015
                 returns.append(ret * 100)
                 
@@ -231,7 +218,7 @@ class ReboundScreener:
 1. 必须输出不多不少恰好 5 只股票！挑选主力洗盘最明显、次日早盘反抽概率最大的。
 2. `reason` 中说明买入逻辑。
 3. `target_price` 设定为次日早盘冲高点，`stop_loss` 设定为跌破支撑均线止损。
-4. 若回测数据显示大亏，提取一条教训（50字以内）填入 `new_lesson_learned`！
+4. 若回测数据显示大亏，提取一条教训（50字以内）填入 `new_lesson_learned`！如果无亏损填“无”。
 
 请严格输出以下 JSON 格式：
 ```json
@@ -306,6 +293,9 @@ class ReboundScreener:
         else:
             top5_html = "<p>🧊 今日无符合极致缩量回踩的个股，主力未露出破绽，空仓休息。</p>"
 
+        # 🚨 修复 SyntaxError: 提前将 \n 替换好，绝对不在 f-string 内写反斜杠！
+        backtest_html = backtest_summary.replace('\n', '<br>')
+
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -313,7 +303,7 @@ class ReboundScreener:
             
             <div style="background-color: #f1f2f6; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
                 <h3 style="margin-top: 0; color: #2980b9;">📊 策略内嵌 10 日动态回测 (次日开盘无脑砸盘法)</h3>
-                <p style="font-size: 14px; margin: 0;">{backtest_summary.replace('\n', '<br>')}</p>
+                <p style="font-size: 14px; margin: 0;">{backtest_html}</p>
             </div>
             
             {top5_html}
@@ -341,6 +331,20 @@ class ReboundScreener:
             logger.info("✅ 低吸战报邮件发送成功！")
         except Exception as e:
             logger.error(f"❌ 邮件发送失败: {e}")
+
+    def save_todays_picks(self, top5_stocks):
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        file_exists = os.path.exists(self.history_file)
+        try:
+            with open(self.history_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['Date_T0', 'Code', 'Name', 'Price_T0', 'Date_T1', 'Price_T1', 'Return_Pct', 'AI_Reason'])
+                for s in top5_stocks:
+                    strategy_tag = f"[{s.get('strategy', '左侧低吸')}] "
+                    writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', strategy_tag + s['reason']])
+        except Exception as e:
+            logger.error(f"保存今日金股失败: {e}")
 
     def run_screen(self):
         logger.info("========== 启动【强庄缩量回踩低吸战法 + 内嵌回测】量化雷达 ==========")
@@ -371,13 +375,11 @@ class ReboundScreener:
             df = df[(df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 300_0000_0000)]
         df = df[df['amount'] >= 100000000]
         
-        candidates = df.sort_values(by='amount', ascending=False).head(100) # 取前100只活跃股测算
+        candidates = df.sort_values(by='amount', ascending=False).head(100)
         logger.info(f"👉 初筛出 {len(candidates)} 只回调企稳标的！启动K线强算与动态回测...")
 
         scored_pool = []
         total_c = len(candidates)
-        
-        # 🚀 收集10天回测数据的池子
         all_backtest_returns = []
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
@@ -391,15 +393,11 @@ class ReboundScreener:
                 
                 tech_df = self.calculate_technical_indicators(df_kline)
                 
-                # ==========================================
-                # 🚀 执行内嵌回测 (不产生额外API请求)
-                # ==========================================
+                # 执行内嵌回测
                 bt_returns = self._run_embedded_backtest(tech_df, lookback_days=10)
                 all_backtest_returns.extend(bt_returns)
                 
-                # ==========================================
-                # 🔪 洗盘战法核心三大定律判断 (计算今日的买点)
-                # ==========================================
+                # 强算雷达
                 last = tech_df.iloc[-1]
                 vol_today = float(last['成交量'])
                 vol_ma5 = float(last['Vol_MA5'])
@@ -449,9 +447,7 @@ class ReboundScreener:
             except Exception:
                 continue
                 
-        # =========================================================
-        # 📊 整理 10 日动态回测报告
-        # =========================================================
+        # 整理 10 日动态回测报告
         backtest_summary = "暂无充足的回测样本。"
         if len(all_backtest_returns) > 0:
             wins = [r for r in all_backtest_returns if r > 0]
@@ -462,11 +458,8 @@ class ReboundScreener:
             backtest_summary = f"过去 10 个交易日内，大盘活跃标的中满足【强庄缩量低吸】形态共 {len(all_backtest_returns)} 次。\n"
             backtest_summary += f"若按『尾盘买入，次日开盘价无脑砸盘』的铁律操作，**胜率为 {win_rate:.1f}%，平均单笔隔夜收益为 {avg_ret:+.2f}%**。\n"
             backtest_summary += f"结论：当前市场情绪 {eval_color}"
-            logger.info(f"📊 {backtest_summary}")
+            logger.info(f"📊 {backtest_summary.replace(chr(10), ' ')}")
 
-        # =========================================================
-        # 👑 胜者为王：截取前 5 名
-        # =========================================================
         final_top_stocks = []
         if scored_pool:
             scored_pool = sorted(scored_pool, key=lambda x: x['综合得分'], reverse=True)
