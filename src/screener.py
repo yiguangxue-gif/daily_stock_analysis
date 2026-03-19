@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - ATR动态止损 + 双盲加权 + 流动性感知 (超神究极版)
+A股游资量化选股雷达 - 策略连亏熔断 + 大盘MA20择时 + 动态凯利 (终极完全体)
 ===================================
 
 核心重构:
-1. 【ATR动态止损】：引入 Average True Range，根据个股股性计算动态止损位（-1.5*ATR），在回测中严格纠偏！
-2. 【长短双盲赛马】：增加“近15日胜率”追踪，打分公式= (250日稳健*0.4) + (15日近期爆发*0.6)，永远踩在当红风口上。
-3. 【全市场流动性感知】：汇总两市真实总成交额喂给AI，量能决定进攻还是防守。
+1. 【策略连亏熔断】：若某策略近15天短线胜率低于 35%，一票否决，直接打入冷宫禁止顺延，防止系统在失效期持续放血！
+2. 【大盘MA20生命线择时】：判断上证指数是否在MA20之上，跌破则强制压降所有策略的凯利仓位，严禁逆势重仓。
+3. 【ATR动态止损 + 长短双盲加权】：保留之前所有强悍的量化回测与防守功能。
 """
 
 import os
@@ -108,6 +108,20 @@ class ReboundScreener:
             top_sectors = df.head(5)['板块名称'].tolist()
             return ", ".join(top_sectors)
         except: return "未知"
+
+    def fetch_market_trend(self):
+        """🚀 获取大盘环境择时 (上证指数 MA20 判断)"""
+        try:
+            sh_index = ak.stock_zh_index_daily_em(symbol="sh000001")
+            if not sh_index.empty and len(sh_index) >= 20:
+                sh_close = sh_index['close'].iloc[-1]
+                sh_ma20 = sh_index['close'].tail(20).mean()
+                if sh_close < sh_ma20:
+                    return False, f"⚠️ 上证指({sh_close:.0f})已跌破MA20({sh_ma20:.0f})！大环境为【空头震荡】，策略成功率将大幅降低！"
+                else:
+                    return True, f"✅ 上证指({sh_close:.0f})稳站MA20({sh_ma20:.0f})之上！大环境为【多头趋势】，适合波段出击！"
+        except: pass
+        return True, "大盘趋势未知，按中性对待。"
 
     def _get_daily_kline(self, code):
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
@@ -319,7 +333,7 @@ class ReboundScreener:
 
         return df
 
-    def ai_select_top5(self, candidates, macro_news, actual_used_strategy, strategy_reason, review_summary, market_stats, top_sectors):
+    def ai_select_top5(self, candidates, macro_news, actual_used_strategy, strategy_reason, review_summary, market_stats, top_sectors, is_market_safe):
         logger.info(f"🧠 正在唤醒 AI 执行今日实战波段出击策略: 【{actual_used_strategy}】")
         if not self.config.gemini_api_key: return {"top_5": []}
 
@@ -332,17 +346,18 @@ class ReboundScreener:
 根据量化系统的【12个月/15日长短双盲加权赛马回测】，今日实战出击的最优波段策略是：【{actual_used_strategy}】！
 出击理由：{strategy_reason}。
 
-### 🌊 全市场真实流动性感知 (极度重要)：
+### 🌊 全市场真实流动性与大盘择时感知 (极度重要)：
 今日两市总成交额为 {market_stats.get('total_amount', 0):.0f} 亿元。
 今日主线风口：{top_sectors}
-(⚠️ 量能决定大盘是万亿主升浪还是缩量绞肉机，请优先挑选契合今日主线风口的个股！)
+大盘技术面择时：{"【安全】大盘在MA20之上，可积极做多" if is_market_safe else "【极度危险】大盘已跌破MA20生命线，覆巢之下无完卵！"}
+(⚠️ 如果大盘跌破MA20，请在选股时强行设定极低的止损位，并在报告中发出红色警报！)
 
 ### 🧠 你的避坑记忆：
 {past_lessons}
 
 ### 📉 【核心指令】近期选股 AI 打脸回测 (多日连贯追踪)：
 {review_summary}
-(⚠️ 警告：如果近期打脸数据全军覆没，你必须在 `ai_reflection` 字段里进行【严厉的自我检讨与打脸反思】！)
+(⚠️ 警告：如果近期打脸数据大面积亏损，你必须在 `ai_reflection` 字段里进行【严厉的自我检讨与打脸反思】，放弃幻想，回归防守低吸！)
 
 ### 🌍 今日宏观大势：
 {macro_news}
@@ -352,13 +367,13 @@ class ReboundScreener:
 
 ### 🎯 你的任务：
 1. 输出恰好 5 只股票！(不足则全选)
-2. 结合“流动性”、“主线风口”和“策略形态”在 `reason` 中说明买入逻辑。
+2. 结合“大盘是否在MA20之上”、“主线风口”和“策略形态”在 `reason` 中说明买入逻辑。
 3. `target_price` 设定为未来5天内的波段冲高目标价，`stop_loss` 设定为严格破位止损价。
 
 请严格输出 JSON 格式：
 ```json
 {{
-    "ai_reflection": "结合两市真实流动性、主线风口及打脸回测进行的深刻定调...",
+    "ai_reflection": "结合大盘MA20生命线、真实流动性及打脸回测进行的深刻定调与检讨...",
     "new_lesson_learned": "提取的新避坑/顺势铁律(无则填：无)",
     "macro_view": "大盘未来一周情绪推演...",
     "top_5": [
@@ -367,7 +382,7 @@ class ReboundScreener:
             "name": "名称",
             "strategy": "原样保留",
             "current_price": 现价,
-            "reason": "入选逻辑（强调主线共振和策略契合度）",
+            "reason": "入选逻辑（强调风口共振和防守底线）",
             "target_price": "波段冲高目标价",
             "stop_loss": "破位止损价"
         }}
@@ -385,7 +400,7 @@ class ReboundScreener:
             return json.loads(repair_json(json_str))
         except Exception: return None
 
-    def send_email_report(self, ai_data, tournament_stats, overall_best_strategy, actual_used_strategy, target_count, review_records, recent_stats, market_stats, top_sectors):
+    def send_email_report(self, ai_data, tournament_stats, overall_best_strategy, actual_used_strategy, target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc):
         logger.info("📧 正在生成赛马战报邮件...")
         sender = self.config.email_sender
         pwd = self.config.email_password
@@ -397,11 +412,14 @@ class ReboundScreener:
         
         limit_up = market_stats.get('limit_up', 0)
         limit_down = market_stats.get('limit_down', 0)
+        trend_color = "#27ae60" if is_market_safe else "#c0392b"
+        
         market_html = f"""
         <div style="background-color: #f1f2f6; padding: 10px; margin-bottom: 15px; border-radius: 5px; text-align: center; font-size: 14px;">
             🌡️ <b>今日全市场水温</b>：上涨 {market_stats.get('up',0)} 家 | 下跌 {market_stats.get('down',0)} 家 | 涨停 <span style="color:red;">{limit_up}</span> 家 | 跌停 <span style="color:green;">{limit_down}</span> 家<br>
-            🌊 <b>两市真实总成交额</b>：<span style="color:#2980b9; font-weight:bold;">{total_vol:.0f} 亿元</span><br>
-            🔥 <b>今日主线风口</b>：<span style="color:#d35400; font-weight:bold;">{top_sectors}</span>
+            🌊 <b>真实总流动性</b>：<span style="color:#2980b9; font-weight:bold;">{total_vol:.0f} 亿元</span><br>
+            🔥 <b>今日主线风口</b>：<span style="color:#d35400; font-weight:bold;">{top_sectors}</span><br>
+            📉 <b>大盘择时状态</b>：<span style="color:{trend_color}; font-weight:bold;">{market_trend_desc}</span>
         </div>
         """
 
@@ -436,7 +454,7 @@ class ReboundScreener:
 
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (长短周期双盲加权 + ATR防守纠偏)</h3>
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (ATR防守过滤 + 近期连亏熔断机制)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
                     <th>战法名称</th><th>长/短触发次</th><th>长线胜率</th><th>15日爆发胜率</th><th>真实单笔收益</th><th>🚀平均冲高</th><th>⚖️凯利推荐仓位</th>
@@ -452,7 +470,13 @@ class ReboundScreener:
             avg_max = stats.get('avg_max', 0.0)
             kelly_pct = stats.get('kelly_pct', 0.0)
             
-            if s_name == overall_best_strategy and s_name == actual_used_strategy:
+            # 🚀 提示被熔断的策略
+            is_banned = stats.get('is_banned', False)
+            
+            if is_banned:
+                row_style = "background-color: #ecf0f1; color: #95a5a6; text-decoration: line-through;"
+                medal = "⛔ [连亏熔断]"
+            elif s_name == overall_best_strategy and s_name == actual_used_strategy:
                 row_style = "background-color: #fff3cd; font-weight: bold; color: #d35400;"
                 medal = "🏆 [霸主&实战]"
             elif s_name == overall_best_strategy:
@@ -465,10 +489,11 @@ class ReboundScreener:
                 row_style = ""
                 medal = ""
                 
-            color_ret = "red" if avg_ret > 0 else "green"
-            color_max = "red" if avg_max > 0 else "black"
-            color_kelly = "red" if kelly_pct > 20 else "black" if kelly_pct > 5 else "green"
+            color_ret = "red" if avg_ret > 0 and not is_banned else "green" if avg_ret <= 0 and not is_banned else "gray"
+            color_max = "red" if avg_max > 0 and not is_banned else "black" if not is_banned else "gray"
+            color_kelly = "red" if kelly_pct > 20 and not is_banned else "black" if kelly_pct > 5 and not is_banned else "gray"
             win_15d_str = f"{win_rate_15d*100:.1f}%" if trades_15d > 0 else "近期无"
+            if is_banned: win_15d_str = f"<span style='color:red;'>{win_15d_str}</span>"
             
             tournament_html += f"""
                 <tr style="{row_style}">
@@ -489,7 +514,7 @@ class ReboundScreener:
             top5_html += f"""
             <h3>🧠 总舵主定调与风口研判</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
-                <p><b>⚖️ 凯利系统指令：</b>基于数学概率测算，该战法单只个股下注仓位上限为 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
+                <p><b>⚖️ 凯利系统指令：</b>基于大盘状态与双盲概率测算，该战法单只个股下注仓位上限为 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
                 <p><b>🔄 检讨与归因：</b>{ai_data.get('ai_reflection', '无')}</p>
                 <p><b>🔴 波段铁律：</b><span style="color:red; font-weight:bold;">{ai_data.get('new_lesson_learned', '无')}</span></p>
                 <p><b>🌍 情绪推演：</b>{ai_data.get('macro_view', '无')}</p>
@@ -514,24 +539,24 @@ class ReboundScreener:
                 """
             top5_html += "</table>"
         else:
-            top5_html = f"<p>🧊 极端行情！系统顺延至最底层也无法选出安全标的，或者回测全盘覆灭，强制空仓休息！</p>"
+            top5_html = f"<p>🧊 极端行情！系统顺延至最底层也无法选出标的，或者近期短线回测全军覆灭触发熔断，强制空仓休息！</p>"
 
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股超神赛马雷达：动态ATR防守 + 长短双盲纠偏 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股超神赛马雷达：长短双盲加权 + 大势择时 ({today_str})</h2>
             {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：尾盘潜伏，严格参考【凯利推荐仓位】。若跌破给定的动态止损价（ATR），触发系统级无条件止损出局！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：尾盘潜伏，严格参考【凯利推荐仓位】。若跌破给定的动态止损价（ATR）无条件斩仓！冲高遇阻启用【移动止盈】保护利润！</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【超神双盲轮动】今日实战风口：{actual_used_strategy} - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【大局观双盲轮动】今日实战风口：{actual_used_strategy} - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "大数据波段系统"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -565,7 +590,7 @@ class ReboundScreener:
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·三位一体终极印钞机】 ==========")
+        logger.info("========== 启动【5日波段潜伏·大局观长短双盲终极印钞机】 ==========")
         
         df = self.get_market_spot()
         if df.empty: return
@@ -582,6 +607,9 @@ class ReboundScreener:
         up_count = len(df[df['pct_chg'] > 0])
         down_count = len(df[df['pct_chg'] < 0])
         market_stats = {'up': up_count, 'down': down_count, 'limit_up': limit_up_count, 'limit_down': limit_down_count, 'total_amount': total_amount_yi}
+        
+        # 🚀 获取大盘环境择时 (上证指数 MA20 判断)
+        is_market_safe, market_trend_desc = self.fetch_market_trend()
         
         is_market_crash = limit_down_count >= 50
         if is_market_crash:
@@ -608,17 +636,17 @@ class ReboundScreener:
         df = df[df['amount'] >= 200000000]
         
         candidates = df.sort_values(by='amount', ascending=False).head(100)
-        logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动长短周期双盲赛马 + ATR矩阵推演...")
+        logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动长短周期双盲赛马 + ATR动态止损推演...")
 
         tournament_stats = {
-            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法E: 龙头断板': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法F: N字反包': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法G: 新高突破': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []},
-            '战法H: 缩量双底': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': []}
+            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法E: 龙头断板': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法F: N字反包': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法G: 新高突破': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法H: 缩量双底': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False}
         }
         
         today_signals = {} 
@@ -651,20 +679,16 @@ class ReboundScreener:
                 
                 test_df = sig_df.iloc[-(actual_lookback+5):-5].copy()
                 
-                # 🚀 核心改进：引入 ATR 动态止损
-                # 假设止损线为：买入日收盘价向下 1.5 倍 ATR
+                # 🚀 引入 ATR 动态止损
                 test_df['Stop_Price'] = test_df['收盘'] - 1.5 * test_df['ATR']
-                # 将绝对价转化为止损百分比，并限制在 -15% 到 -3% 之间防极端
                 test_df['Stop_Pct'] = ((test_df['Stop_Price'] - test_df['收盘']) / test_df['收盘'] * 100).clip(-15.0, -3.0)
                 
                 test_df['Low_5D_Pct'] = ((test_df['Low_5D'] - test_df['收盘']) / test_df['收盘']) * 100
                 test_df['Raw_Ret_5D'] = ((test_df['Close_T5'] - test_df['收盘']) / test_df['收盘'] - 0.003) * 100
                 
-                # 只要5日内任意一天跌穿专属 ATR 止损线，强制计为止损出局 (扣除额外0.5%摩擦滑点)
                 test_df['Ret_5D'] = np.where(test_df['Low_5D_Pct'] <= test_df['Stop_Pct'], test_df['Stop_Pct'] - 0.5, test_df['Raw_Ret_5D'])
                 test_df['Max_Gain'] = ((test_df['High_5D'] - test_df['收盘']) / test_df['收盘']) * 100
                 
-                # 分离出近 15 天的数据用于短期爆发力测算
                 test_df_15 = test_df.tail(15)
 
                 strategy_keys = [
@@ -678,7 +702,6 @@ class ReboundScreener:
                     trades = test_df[test_df[col_name]]
                     trades_15 = test_df_15[test_df_15[col_name]]
                     
-                    # 统计 250 日长线稳健数据
                     if not trades.empty:
                         valid_rets = trades['Ret_5D'].dropna()
                         valid_maxs = trades['Max_Gain'].dropna()
@@ -690,7 +713,6 @@ class ReboundScreener:
                             tournament_stats[s_key]['max_drawdowns'].extend(valid_dd.tolist())
                             tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
                     
-                    # 统计 15 日近期爆发数据
                     if not trades_15.empty:
                         valid_rets_15 = trades_15['Ret_5D'].dropna()
                         if not valid_rets_15.empty:
@@ -712,7 +734,7 @@ class ReboundScreener:
             except Exception: continue
 
         # =========================================================
-        # 🏆 智能顺延选股机制：长短双盲加权 + 凯利仓位
+        # 🏆 智能顺延选股机制：近期连亏熔断 + 长短双盲加权 + 凯利仓位
         # =========================================================
         ranked_strategies = []
         for s_name, stats in tournament_stats.items():
@@ -728,11 +750,21 @@ class ReboundScreener:
                 win_rate_15d = stats['wins_15d'] / trades_15d if trades_15d > 0 else 0
                 avg_ret_15d = sum(stats['returns_15d']) / trades_15d if trades_15d > 0 else 0
                 
+                # 🚀 策略防暴雷熔断：如果最近 15 天触发过3次以上，且胜率低于 35%，直接打入冷宫！
+                if trades_15d >= 3 and win_rate_15d < 0.35:
+                    stats['is_banned'] = True
+                    logger.warning(f"🚫 策略熔断警告: 【{s_name}】 近期胜率仅为 {win_rate_15d*100:.1f}%，已跌破安全阈值，直接剥夺出击资格！")
+                
                 # 计算凯利公式推荐仓位
                 avg_win_ret = sum([r for r in stats['returns'] if r > 0]) / stats['wins'] if stats['wins'] > 0 else 0.02
                 avg_loss_ret = abs(sum([r for r in stats['returns'] if r <= 0]) / (trades - stats['wins'])) if (trades - stats['wins']) > 0 else 0.05
                 odds = avg_win_ret / avg_loss_ret if avg_loss_ret > 0 else 1.0
                 kelly_fraction = win_rate - ((1 - win_rate) / odds) if avg_loss_ret > 0 else 0.99
+                
+                # 🚀 大盘大势降权：如果大盘跌破MA20生命线，所有策略的凯利仓位直接砍半！防守第一！
+                if not is_market_safe:
+                    kelly_fraction = kelly_fraction * 0.5 
+                    
                 kelly_pct = max(0, min(1.0, kelly_fraction)) * 100
                 
                 # 🚀 新版双盲评分：兼顾250天常青与15天爆发
@@ -743,19 +775,19 @@ class ReboundScreener:
                 if trades_15d > 0:
                     final_score = long_score * 0.4 + short_score * 0.6
                 else:
-                    final_score = long_score * 0.5 # 近期无人问津，略微降权
+                    final_score = long_score * 0.5 
                 
-                # 储存回源以便HTML报告使用
                 stats['win_rate'] = win_rate
                 stats['avg_ret'] = avg_ret
                 stats['avg_max'] = avg_max
                 stats['win_rate_15d'] = win_rate_15d
                 stats['kelly_pct'] = kelly_pct
 
-                ranked_strategies.append({
-                    'name': s_name, 'score': final_score, 'trades': trades,
-                    'win_rate': win_rate, 'avg_ret': avg_ret, 'avg_max': avg_max, 'avg_dd': avg_dd
-                })
+                if not stats['is_banned']:
+                    ranked_strategies.append({
+                        'name': s_name, 'score': final_score, 'trades': trades,
+                        'win_rate': win_rate, 'avg_ret': avg_ret, 'avg_max': avg_max, 'avg_dd': avg_dd
+                    })
         
         ranked_strategies.sort(key=lambda x: x['score'], reverse=True)
         
@@ -803,14 +835,14 @@ class ReboundScreener:
                     actual_used_strategy = s_name
                     final_pool = temp_pool
                     if s_name == overall_best_strategy:
-                        best_reason = f"长短双盲加权霸主出击！双周期火力全开，回撤惩罚打分第一！"
+                        best_reason = f"避开熔断雷区！长短双盲霸主出击！近期未遭大面积亏损，双周期火力全开，回撤惩罚打分第一！"
                     else:
-                        best_reason = f"智能顺延出击！主风口切换至【{s_name}】，短线爆发力优势占优！"
+                        best_reason = f"智能顺延出击！霸主轮空，切换至未被连亏熔断的安全战法【{s_name}】，短线爆发力占优！"
                     break
 
         if not actual_used_strategy and not final_pool:
             actual_used_strategy = '强制空仓'
-            best_reason = "当前所有优势波段策略均无标的触发，或者近期双盲回测全部亏损，强行切断买入信号，保住子弹！"
+            best_reason = "当前所有优势波段策略均无标的触发，或者近期双盲回测全部触发连亏熔断，强行切断买入信号，保住子弹！"
 
         logger.info(f"🎯 今日锁定实战出击策略: 【{actual_used_strategy}】 ({best_reason})")
 
@@ -825,13 +857,13 @@ class ReboundScreener:
         ai_result = None
         if final_top_stocks:
             macro_news = self.fetch_macro_news()
-            ai_result = self.ai_select_top5(final_top_stocks, macro_news, actual_used_strategy, best_reason, review_summary, market_stats, top_sectors)
+            ai_result = self.ai_select_top5(final_top_stocks, macro_news, actual_used_strategy, best_reason, review_summary, market_stats, top_sectors, is_market_safe)
             
             if ai_result and "top_5" in ai_result and len(ai_result["top_5"]) > 0:
                 self.save_todays_picks(ai_result["top_5"], ai_reflection=ai_result.get("ai_reflection", ""))
                 self.save_ai_lesson(ai_result.get("new_lesson_learned", ""))
         
-        self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats, top_sectors)
+        self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc)
         print("================================================================================")
 
 if __name__ == "__main__":
