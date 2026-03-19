@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 八大策略赛马 + 智能顺延出击 + 打脸追踪 (究极版)
+A股游资量化选股雷达 - 智能顺延 + 最大回撤探测 + 股灾熔断 (终极版)
 ===================================
 
-核心重构 (全景轮动系统):
-1. 【智能顺延出击】：当12个月回测的“冠军策略”今日选不出标的时，系统会自动向下寻找“亚军”、“季军”，直到找到有标的且胜率达标的战法，绝不白白踏空！
-2. 【打脸处刑台升级】：加入了“推演日期”和“当时AI定调反思”，让所有吹过的牛逼都有迹可循，亏损强制检讨。
-3. 【终极熔断防卡死】：保留了 6 次失败强制跳过、6秒极速超时的防黑洞功能。
-4. 【八大神级战法内置】：趋势低吸、底部起爆、强庄首阴、均线粘合、龙头断板、N字反包、新高突破、极致双底。
+核心重构:
+1. 【最大回撤探测】：测算买入后5天内的"最深跌幅"，结合"最大冲高"，算出真实的持仓体验和盈亏比。
+2. 【全局股灾熔断】：探测全市场跌停家数，跌停>50家时触发熔断，拒绝顺延任何进攻策略，保护本金！
+3. 【打脸处刑台完善】：精确记录推演日期与AI原话反思。
 """
 
 import os
@@ -180,10 +179,10 @@ class ReboundScreener:
                             df_hist.at[idx, 'Return_Pct'] = round(ret_pct, 2)
                             
                             review_records.append({
-                                "推演日": row['Date_T0'], # 新增推演日期
+                                "推演日": row['Date_T0'],
                                 "代码": code, "名称": row['Name'], "买入价": t0_price, 
                                 "当前价": t1_price, "真实涨跌幅": f"{ret_pct:+.2f}%", 
-                                "当时逻辑": str(row.get('AI_Reason', ''))[:60] # 包含当时的AI反思
+                                "当时逻辑": str(row.get('AI_Reason', ''))[:60]
                             })
                 df_hist.to_csv(self.history_file, index=False)
                 
@@ -240,24 +239,17 @@ class ReboundScreener:
         df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
         df['MACD'] = 2 * (df['MACD_DIF'] - df['MACD_DEA'])
         
-        delta = df['收盘'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=6, min_periods=1).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=6, min_periods=1).mean()
-        rs = gain / loss
-        df['RSI6'] = 100 - (100 / (1 + rs))
-        
-        df['BIAS20'] = (df['收盘'] - df['MA20']) / df['MA20'] * 100
-        
         df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
         df['High_20d_shift'] = df['最高'].shift(1).rolling(20, min_periods=1).max()
         df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
         df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
         
         df['Body'] = abs(df['收盘'] - df['开盘'])
-        df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
 
+        # 🚀 核心测算：5日波段收益、最大冲高、最大回撤 (洗盘深度)
         df['Close_T5'] = df['收盘'].shift(-5)
         df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
+        df['Low_5D'] = df['最低'].shift(-1)[::-1].rolling(5, min_periods=1).min()[::-1]
         
         df['Pct_Chg_Shift1'] = df['涨跌幅'].shift(1)
         df['Pct_Chg_Shift2'] = df['涨跌幅'].shift(2)
@@ -331,17 +323,17 @@ class ReboundScreener:
             cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨跌幅:{c['今日涨幅']} | 量比:{c['量比']}\n"
 
         prompt = f"""你是一位A股神级游资总舵主。
-根据我们量化系统的【12个月全景赛马回测】及【智能动态顺延机制】，今日实战出击的最优波段策略是：【{actual_used_strategy}】！
+根据量化系统的【12个月全景赛马回测】及【智能动态顺延机制】，今日实战出击的最优波段策略是：【{actual_used_strategy}】！
 出击理由：{strategy_reason}。
 
-这证明该战法是目前最适应今天A股盘面生态的印钞机。我已使用该战法为你筛选出以下【今日完美备选池】！
+请用该战法评估以下【今日实战备选池】！
 
 ### 🧠 你的避坑记忆：
 {past_lessons}
 
 ### 📉 【核心指令】近期选股 AI 打脸回测 (多日连贯追踪)：
 {review_summary}
-(⚠️ 警告：仔细看上面的打脸复盘数据，如果最近你选的股出现了亏损或胜率暴跌，你必须在下方的 `ai_reflection` 字段里进行【严厉的自我检讨与打脸反思】，指出当时是接盘了高位还是被洗盘了，并端正今天的选股态度！)
+(⚠️ 警告：仔细看上面的打脸复盘数据，如果近期你选的股出现了普遍亏损或胜率暴跌，你必须在下方的 `ai_reflection` 字段里进行【严厉的自我检讨与打脸反思】，指出当时是被洗盘还是接盘了，并端正今天的选股态度！)
 
 ### 🌍 今日宏观大势：
 {macro_news}
@@ -351,14 +343,12 @@ class ReboundScreener:
 
 ### 🎯 你的任务：
 1. 输出不多不少恰好 5 只股票！(不足5只则全选)
-2. 这次操作模式是【波段操作】，买入后持仓观察 3-5 天。
-3. `reason` 说明买入逻辑。
-4. `target_price` 设定为未来5天内的波段冲高目标价，`stop_loss` 为防守破位价。
+2. 给出波段目标价和防守破位止损价。
 
 请严格输出 JSON 格式：
 ```json
 {{
-    "ai_reflection": "对大盘环境的洞察，以及结合【近期选股打脸回测】进行深刻的自我审视与检讨...",
+    "ai_reflection": "结合大盘情绪和【近期选股打脸回测】进行的深刻自我审视与定调...",
     "new_lesson_learned": "提取的新避坑/顺势铁律(无则填：无)",
     "macro_view": "大盘未来一周情绪推演...",
     "top_5": [
@@ -385,8 +375,8 @@ class ReboundScreener:
             return json.loads(repair_json(json_str))
         except Exception: return None
 
-    def send_email_report(self, ai_data, tournament_stats, overall_best_strategy, actual_used_strategy, target_count, review_records, recent_stats):
-        logger.info("📧 正在生成八路诸侯波段赛马战报邮件...")
+    def send_email_report(self, ai_data, tournament_stats, overall_best_strategy, actual_used_strategy, target_count, review_records, recent_stats, market_stats):
+        logger.info("📧 正在生成赛马战报邮件...")
         sender = self.config.email_sender
         pwd = self.config.email_password
         receivers = self.config.email_receivers or [sender]
@@ -394,7 +384,16 @@ class ReboundScreener:
 
         today_str = datetime.now().strftime('%Y-%m-%d')
         
-        # 1. 打脸处刑台 (增加推演日期和AI反思)
+        # 0. 市场情绪快照
+        limit_up = market_stats.get('limit_up', 0)
+        limit_down = market_stats.get('limit_down', 0)
+        market_html = f"""
+        <div style="background-color: #f1f2f6; padding: 10px; margin-bottom: 15px; border-radius: 5px; text-align: center; font-size: 14px;">
+            🌡️ <b>今日全市场水温</b>：上涨 {market_stats.get('up',0)} 家 | 下跌 {market_stats.get('down',0)} 家 | 涨停 <span style="color:red;">{limit_up}</span> 家 | 跌停 <span style="color:green;">{limit_down}</span> 家
+        </div>
+        """
+
+        # 1. 打脸处刑台 
         review_html = ""
         if review_records:
             avg_ret = recent_stats.get('avg_ret', 0.0)
@@ -424,13 +423,13 @@ class ReboundScreener:
                 """
             review_html += "</table><hr>"
 
-        # 2. 大数据赛马榜 (智能顺延展示)
+        # 2. 大数据赛马榜 (增加最大回撤列)
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #2980b9;">🏇 八路诸侯波段赛马榜 (近250交易日全景回测)</h3>
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八路诸侯波段赛马榜 (近12个月全景回测)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
-                    <th>战法名称</th><th>长线触发次数</th><th>5日后胜率</th><th>5日平均收益</th><th>5日内平均最大冲高</th>
+                    <th>战法名称</th><th>长线触发次数</th><th>5日后胜率</th><th>5日平均收益</th><th>🚀平均最大冲高</th><th>🩸平均最大回撤</th>
                 </tr>
         """
         
@@ -439,14 +438,15 @@ class ReboundScreener:
             win_rate = stats['wins'] / trades * 100 if trades > 0 else 0
             avg_ret = sum(stats['returns']) / trades if trades > 0 else 0
             avg_max = sum(stats['max_gains']) / trades if trades > 0 else 0
+            avg_dd = sum(stats['max_drawdowns']) / trades if trades > 0 else 0
             
             # 智能顺延的UI展示逻辑
             if s_name == overall_best_strategy and s_name == actual_used_strategy:
                 row_style = "background-color: #fff3cd; font-weight: bold; color: #d35400;"
-                medal = "🏆 [全年霸主 & 今日实战]"
+                medal = "🏆 [霸主&实战]"
             elif s_name == overall_best_strategy:
                 row_style = "background-color: #fdfbf7; color: #7f8c8d;"
-                medal = "👑 [全年霸主 - 今日无标的]"
+                medal = "👑 [全年霸主-今日轮空]"
             elif s_name == actual_used_strategy:
                 row_style = "background-color: #d1ecf1; font-weight: bold; color: #2980b9;"
                 medal = "🎯 [系统顺延出击]"
@@ -456,6 +456,7 @@ class ReboundScreener:
                 
             color_ret = "red" if avg_ret > 0 else "green"
             color_max = "red" if avg_max > 0 else "black"
+            color_dd = "green" if avg_dd < -5 else "black" # 跌破5%标记严重绿色
             
             tournament_html += f"""
                 <tr style="{row_style}">
@@ -464,6 +465,7 @@ class ReboundScreener:
                     <td>{win_rate:.1f}%</td>
                     <td style="color: {color_ret};">{avg_ret:+.2f}%</td>
                     <td style="color: {color_max}; font-weight: bold;">{avg_max:+.2f}%</td>
+                    <td style="color: {color_dd};">{avg_dd:+.2f}%</td>
                 </tr>
             """
         tournament_html += "</table></div>"
@@ -498,17 +500,18 @@ class ReboundScreener:
                 """
             top5_html += "</table>"
         else:
-            top5_html = f"<p>🧊 极端行情！当前最优顺延策略【{actual_used_strategy}】最终也无达标个股，强制空仓休息！</p>"
+            top5_html = f"<p>🧊 极端行情！系统顺延至最底层也无法选出安全标的，强制空仓休息！</p>"
 
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股神级赛马雷达：动态顺延轮动 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股神级赛马雷达：智能顺延轮动 ({today_str})</h2>
+            {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：尾盘买入潜伏，持有观察 3-5 个交易日。期间一旦达到【平均最大冲高】利润，果断落袋为安，绝不恋战！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：尾盘买入潜伏，持有观察 3-5 个交易日。结合回测的【最大回撤】严格设损，达到【最大冲高】落袋为安！</p>
         </body>
         </html>
         """
@@ -543,13 +546,12 @@ class ReboundScreener:
                 for s in top5_stocks:
                     strategy_tag = f"[{s.get('strategy', '实战出击策略')}] "
                     ai_ref_short = ai_reflection.replace('\n', ' ')[:40]
-                    # 融合具体买入逻辑和AI当时的总定调，方便日后打脸
                     reason_with_ref = f"{strategy_tag} {s['reason']} | [当时定调]: {ai_ref_short}..."
                     writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', reason_with_ref])
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·八路诸侯智能顺延引擎】 ==========")
+        logger.info("========== 启动【5日波段潜伏·八路诸侯智能顺延引擎 (带熔断)】 ==========")
         
         df = self.get_market_spot()
         if df.empty: return
@@ -558,6 +560,17 @@ class ReboundScreener:
             
         logger.info("👉 执行活跃资金池初筛...")
         
+        # 🚀 增加大盘情绪核按钮探测
+        limit_down_count = len(df[df['pct_chg'] <= -9.5])
+        limit_up_count = len(df[df['pct_chg'] >= 9.5])
+        up_count = len(df[df['pct_chg'] > 0])
+        down_count = len(df[df['pct_chg'] < 0])
+        market_stats = {'up': up_count, 'down': down_count, 'limit_up': limit_up_count, 'limit_down': limit_down_count}
+        
+        is_market_crash = limit_down_count >= 50 # 跌停家数大于50触发股灾熔断
+        if is_market_crash:
+            logger.error(f"🚨 极其恶劣！全市场跌停达 {limit_down_count} 家！触发股灾核按钮熔断，强制剥夺所有进攻策略！")
+
         if df['circ_mv'].sum() == 0 and self.pro:
             try:
                 cal = self.pro.trade_cal(exchange='SSE', is_open='1', start_date=(datetime.now() - pd.Timedelta(days=10)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
@@ -581,21 +594,21 @@ class ReboundScreener:
         candidates = df.sort_values(by='amount', ascending=False).head(100)
         logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动八大波段战法极速矩阵推演...")
 
+        # 加入 max_drawdowns 记录波段内最深砸盘幅度
         tournament_stats = {
-            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法E: 龙头断板': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法F: N字反包': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法G: 新高突破': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
-            '战法H: 缩量双底': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []}
+            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法E: 龙头断板': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法F: N字反包': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法G: 新高突破': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []},
+            '战法H: 缩量双底': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': [], 'max_drawdowns': []}
         }
         
         today_signals = {} 
         total_c = len(candidates)
         lookback_days = 250
-        
         consecutive_errors = 0
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
@@ -624,8 +637,10 @@ class ReboundScreener:
                 
                 test_df = sig_df.iloc[-(actual_lookback+5):-5].copy()
                 
+                # 收益与最大回撤
                 test_df['Ret_5D'] = ((test_df['Close_T5'] - test_df['收盘']) / test_df['收盘'] - 0.003) * 100
                 test_df['Max_Gain'] = ((test_df['High_5D'] - test_df['收盘']) / test_df['收盘']) * 100
+                test_df['Max_Drawdown'] = ((test_df['Low_5D'] - test_df['收盘']) / test_df['收盘']) * 100
                 
                 strategy_keys = [
                     ('战法A: 趋势低吸', 'Sig_A_Trend_Pullback'), 
@@ -643,10 +658,12 @@ class ReboundScreener:
                     if not trades.empty:
                         valid_rets = trades['Ret_5D'].dropna()
                         valid_maxs = trades['Max_Gain'].dropna()
+                        valid_dd = trades['Max_Drawdown'].dropna()
                         if not valid_rets.empty:
                             tournament_stats[s_key]['trades'] += len(valid_rets)
                             tournament_stats[s_key]['returns'].extend(valid_rets.tolist())
                             tournament_stats[s_key]['max_gains'].extend(valid_maxs.tolist())
+                            tournament_stats[s_key]['max_drawdowns'].extend(valid_dd.tolist())
                             tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
                 
                 last = sig_df.iloc[-1]
@@ -663,7 +680,7 @@ class ReboundScreener:
             except Exception: continue
 
         # =========================================================
-        # 🏆 智能顺延选股机制：胜率排名 -> 依次寻找可用标的
+        # 🏆 智能顺延选股机制：胜率打分制 (引入夏普比率防跳水)
         # =========================================================
         ranked_strategies = []
         for s_name, stats in tournament_stats.items():
@@ -672,13 +689,17 @@ class ReboundScreener:
                 win_rate = stats['wins'] / trades
                 avg_ret = sum(stats['returns']) / trades
                 avg_max = sum(stats['max_gains']) / trades
-                score = win_rate * avg_ret
+                avg_dd = sum(stats['max_drawdowns']) / trades
+                
+                # 🚀 新版波段评分：盈亏比加权！收益越高越好，回撤越大分数扣得越狠
+                dd_penalty = max(1.0, abs(avg_dd)) 
+                score = (win_rate * avg_ret) / dd_penalty
+                
                 ranked_strategies.append({
                     'name': s_name, 'score': score, 'trades': trades,
-                    'win_rate': win_rate, 'avg_ret': avg_ret, 'avg_max': avg_max
+                    'win_rate': win_rate, 'avg_ret': avg_ret, 'avg_max': avg_max, 'avg_dd': avg_dd
                 })
         
-        # 按得分从高到低排序
         ranked_strategies.sort(key=lambda x: x['score'], reverse=True)
         
         overall_best_strategy = ranked_strategies[0]['name'] if ranked_strategies else None
@@ -693,53 +714,49 @@ class ReboundScreener:
             '战法G: 新高突破': 'sig_G', '战法H: 缩量双底': 'sig_H'
         }
 
-        # 核心逻辑：从最高分的策略开始找，如果今天没股票触发，就自动找第二名、第三名...
-        for st in ranked_strategies:
-            s_name = st['name']
-            
-            # 如果分数已经是负数（全部在亏钱），放弃进攻，直接跳出循环走防守逻辑
-            if st['score'] < 0:
-                continue
-
-            target_sig_key = sig_map[s_name]
-            temp_pool = []
-            
-            for code, info in today_signals.items():
-                if info[target_sig_key]:
-                    temp_pool.append({
-                        "代码": code, "名称": info['name'], "现价": info['price'],
-                        "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
-                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿",
-                        "sort_score": info['amount'] 
-                    })
-            
-            # 如果这个高分策略选出股票了，它就是我们今天最终要用的策略！
-            if temp_pool:
-                actual_used_strategy = s_name
-                final_pool = temp_pool
-                
-                if s_name == overall_best_strategy:
-                    best_reason = f"一统江湖！全年霸主战法今日成功触发。近12个月全景回测触发{st['trades']}次，5天胜率{st['win_rate']*100:.1f}%，平均最大冲高{st['avg_max']:+.2f}%！"
-                else:
-                    best_reason = f"智能顺延出击！全年霸主【{overall_best_strategy}】今日无标的，系统向下切换至最优可行战法【{s_name}】：5天胜率{st['win_rate']*100:.1f}%，平均最大冲高{st['avg_max']:+.2f}%！"
-                break
-                
-        # 如果所有赚钱的策略今天都选不出股票（或者全在亏钱），强制启用最后一道防线
-        if not actual_used_strategy:
-            logger.warning("🚨 极寒冰点或所有优势战法均无标的，强制开启深海防守。")
+        # 如果遇到股灾熔断，清空普通赛马，强制锁定 H 战法
+        if is_market_crash:
             actual_used_strategy = '战法H: 缩量双底'
-            overall_best_strategy = overall_best_strategy or actual_used_strategy
-            best_reason = "12个月历史大数据显示全部进攻策略吃面或今日轮空，强制切入最保守的极度缩量双底防守形态保命。"
-            
-            target_sig_key = sig_map[actual_used_strategy]
+            overall_best_strategy = '市场熔断避险'
+            best_reason = f"大盘暴跌超 {limit_down_count} 家跌停！启动紧急防空警报，废除一切顺延，仅允许极度缩量的双底形态防御。"
             for code, info in today_signals.items():
-                if info[target_sig_key]:
+                if info[sig_map[actual_used_strategy]]:
                     final_pool.append({
                         "代码": code, "名称": info['name'], "现价": info['price'],
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
-                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿",
-                        "sort_score": info['amount'] 
+                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "sort_score": info['amount'] 
                     })
+        else:
+            # 正常顺延机制
+            for st in ranked_strategies:
+                s_name = st['name']
+                if st['score'] < 0: continue # 亏钱的策略不要
+                
+                target_sig_key = sig_map[s_name]
+                temp_pool = []
+                
+                for code, info in today_signals.items():
+                    if info[target_sig_key]:
+                        temp_pool.append({
+                            "代码": code, "名称": info['name'], "现价": info['price'],
+                            "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
+                            "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿",
+                            "sort_score": info['amount'] 
+                        })
+                
+                if temp_pool:
+                    actual_used_strategy = s_name
+                    final_pool = temp_pool
+                    if s_name == overall_best_strategy:
+                        best_reason = f"全年霸主出击！触发{st['trades']}次，胜率{st['win_rate']*100:.1f}%，最大冲高{st['avg_max']:+.2f}%，回撤仅{st['avg_dd']:+.2f}%！"
+                    else:
+                        best_reason = f"智能顺延出击！霸主轮空，切换至【{s_name}】：胜率{st['win_rate']*100:.1f}%，最大冲高{st['avg_max']:+.2f}%，回撤{st['avg_dd']:+.2f}%！"
+                    break
+
+        # 如果完全没有股票入选，强行空仓
+        if not actual_used_strategy and not final_pool:
+            actual_used_strategy = '强制空仓'
+            best_reason = "当前所有优势波段策略均无标的触发，强行切断买入信号，保住子弹！"
 
         logger.info(f"🎯 今日锁定实战出击策略: 【{actual_used_strategy}】 ({best_reason})")
 
@@ -760,7 +777,7 @@ class ReboundScreener:
                 self.save_todays_picks(ai_result["top_5"], ai_reflection=ai_result.get("ai_reflection", ""))
                 self.save_ai_lesson(ai_result.get("new_lesson_learned", ""))
         
-        self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats)
+        self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats)
         print("================================================================================")
 
 if __name__ == "__main__":
