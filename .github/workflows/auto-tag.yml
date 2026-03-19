@@ -1,41 +1,50 @@
-name: Auto Tag
+name: 🚀 A股AI自进化选股雷达
 
-# 触发条件：当代码 push 到 main 分支时
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - 'local/**'
-      - '.github/**'
-      - 'source/**'
+  schedule:
+    # 每天北京时间 02:10 运行 (UTC 前一日 18:10)
+    - cron: '10 06 * * 1-5'
+  workflow_dispatch: # 允许手动点击运行
+
+# 【极其关键】：赋予机器人提交代码的写权限
+permissions:
+  contents: write
 
 jobs:
-  tag:
+  run-screener:
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '#skip') && !contains(github.event.head_commit.message, '#none')"
-
-    # 设置权限，允许创建 tag
-    permissions:
-      contents: write
+    
+    # 映射环境变量，Python 才能读取并发邮件
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+      EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
 
     steps:
-      # Step 1: 检出代码，fetch-depth: 0 获取完整历史（用于读取已有 tag）
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
 
-      # Step 2: 自动计算并创建新版本 tag
-      - name: Bump version and push tag
-        uses: anothrNick/github-tag-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WITH_V: true              # tag 格式带 v 前缀，如 v2.1.1
-          DEFAULT_BUMP: patch       # 默认增加补丁版本 +0.0.1
-          INITIAL_VERSION: 2.1.0    # 如果没有 tag，从这个版本开始
-          PATCH_STRING_TOKEN: '#patch'
-          MINOR_STRING_TOKEN: '#minor'
-          MAJOR_STRING_TOKEN: '#major'
+    - name: 🐍 设置 Python 环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: 📦 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install akshare pandas numpy json-repair
+    - name: 🎯 运行量化选股雷达
+      run: |
+        python -m src.screener
+    # 👇👇 终极修复：加了 -f 参数，强制无视 gitignore 写入 AI 记忆 👇👇
+    - name: 💾 Commit and push AI Memory
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add -f data/
+        # 如果 data 文件夹没变化，就跳过不报错
+        git commit -m "🤖 Auto-update AI memory and history" || echo "No new lessons to commit"
+        git push
