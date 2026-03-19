@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 八大策略赛马 + AI打脸回测轮动引擎 (究极版)
+A股游资量化选股雷达 - 八大策略赛马 + AI打脸回测轮动引擎 (防卡死极速版)
 ===================================
 
-核心重构 (全景轮动系统):
-1. 【八大神级战法内置】：趋势低吸、底部起爆、强庄首阴、均线粘合、龙头断板、N字反包、新高突破、极致双底。
-2. 【12个月极致赛马】：每天对这 8 个策略进行过去 250 个交易日的回测，自动选出胜率与收益双绝的冠军策略！
-3. 【AI 打脸复盘】：自动拉取前几天选出的股票核算真实盈亏，如果亏损，强制 AI 在战报中自我检讨（打脸分析）并提取教训。
+核心重构 (防卡死与全景轮动):
+1. 【终极熔断】：如果连续6只股票获取K线失败，判定为IP被封锁，立即强行中断扫描并结算现有数据，拒绝死等！
+2. 【极速超时】：将全局 API 请求超时从 15 秒下调至 6 秒，宁可失败也绝不卡死。
+3. 【八大神级战法内置】：趋势低吸、底部起爆、强庄首阴、均线粘合、龙头断板、N字反包、新高突破、极致双底。
 """
 
 import os
@@ -42,7 +42,8 @@ from src.config import get_config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-socket.setdefaulttimeout(15.0)
+# 🚀 核心优化 1：超时时间从 15 秒下调到 6 秒，遇到黑洞立刻抛弃，绝不卡死！
+socket.setdefaulttimeout(6.0)
 
 class ReboundScreener:
     def __init__(self):
@@ -60,18 +61,19 @@ class ReboundScreener:
                 logger.info("✅ 检测到 Tushare Token，已激活 VIP 护盾引擎！")
             except Exception: pass
 
-    def _fetch_with_retry(self, func, retries=2, delay=1, *args, **kwargs):
+    def _fetch_with_retry(self, func, retries=1, delay=0.5, *args, **kwargs):
+        # 🚀 降低重试次数和延时，加快失败速度
         for attempt in range(retries):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
                 if attempt == retries - 1: raise e
-                time.sleep(delay + attempt)
+                time.sleep(delay)
 
     def get_market_spot(self):
         try:
             logger.info("尝试获取全量行情 (主引擎)...")
-            df = self._fetch_with_retry(ak.stock_zh_a_spot_em, retries=2, delay=2)
+            df = self._fetch_with_retry(ak.stock_zh_a_spot_em, retries=2, delay=1)
             df['code'] = df['代码'].astype(str)
             df['name'] = df['名称']
             df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
@@ -85,7 +87,7 @@ class ReboundScreener:
         except Exception as e:
             logger.warning("东方财富接口受限，🔄 切换至新浪财经...")
             try:
-                df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=2, delay=2)
+                df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=1, delay=1)
                 col_map = {'symbol': '代码', 'name': '名称', 'changepercent': '涨跌幅', 'amount': '成交额', 'trade': '最新价', 'open': '今开', 'settlement': '昨收'}
                 for eng, chn in col_map.items():
                     if chn not in df.columns and eng in df.columns: df[chn] = df[eng]
@@ -105,11 +107,11 @@ class ReboundScreener:
     def _get_daily_kline(self, code):
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
         try:
-            return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=1, symbol=code, period="daily", start_date=start_date, adjust="qfq")
+            return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, adjust="qfq")
         except Exception: pass
         try:
             symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
-            df = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=1, symbol=symbol_sina, start_date=start_date, adjust="qfq")
+            df = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=0.5, symbol=symbol_sina, start_date=start_date, adjust="qfq")
             if df is not None and not df.empty:
                 res = pd.DataFrame()
                 res['日期'] = df['date']
@@ -153,7 +155,6 @@ class ReboundScreener:
         except: pass
 
     def process_review_and_history(self, market_df, lookback_days=5):
-        """🚀 AI打脸复盘系统：追踪前几日选股的真实涨跌"""
         today_str = datetime.now().strftime('%Y-%m-%d')
         review_summary = "暂无往期复盘数据。"
         review_records = []
@@ -218,7 +219,6 @@ class ReboundScreener:
         return review_summary, review_records, recent_stats
 
     def calculate_technical_indicators(self, hist):
-        """计算八大神级波段战法所需的技术指标"""
         df = hist.copy()
         for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
             df[c] = pd.to_numeric(df[c], errors='coerce')
@@ -233,38 +233,31 @@ class ReboundScreener:
         df['MA60'] = df['收盘'].rolling(60).mean()
         df['Vol_MA5'] = df['成交量'].rolling(5).mean()
         
-        # MACD (用于双底背离等)
         exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
         exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
         df['MACD_DIF'] = exp1 - exp2
         df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
         df['MACD'] = 2 * (df['MACD_DIF'] - df['MACD_DEA'])
         
-        # RSI (6日，用于反核)
         delta = df['收盘'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=6, min_periods=1).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=6, min_periods=1).mean()
         rs = gain / loss
         df['RSI6'] = 100 - (100 / (1 + rs))
         
-        # 乖离率 Bias
         df['BIAS20'] = (df['收盘'] - df['MA20']) / df['MA20'] * 100
         
-        # 历史极值 (防报错加 min_periods)
         df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
         df['High_20d_shift'] = df['最高'].shift(1).rolling(20, min_periods=1).max()
         df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
         df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
         
-        # 实体与上影线
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
 
-        # 测算 5 日波段收益 (T+5)
         df['Close_T5'] = df['收盘'].shift(-5)
         df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
         
-        # 为 N字反包准备前几天的数据
         df['Pct_Chg_Shift1'] = df['涨跌幅'].shift(1)
         df['Pct_Chg_Shift2'] = df['涨跌幅'].shift(2)
         df['Pct_Chg_Shift3'] = df['涨跌幅'].shift(3)
@@ -274,57 +267,54 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        """
-        🚀 八大神级波段战法 (扩容版：覆盖趋势、接力、反核、起爆)
-        """
-        # 战法A: 趋势低吸 (均线多头，缩量回踩MA20)
+        # 战法A: 趋势低吸
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
         sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol
 
-        # 战法B: 底部起爆 (长期在半年线下方，今日两倍量突破MA60)
+        # 战法B: 底部起爆
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
         sB_break = df['收盘'] > df['MA60']
         sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sB_pct = df['涨跌幅'] > 4.0
         df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct
 
-        # 战法C: 强庄首阴 (10天内有涨停或>8%大阳，今日缩量收阴)
+        # 战法C: 强庄首阴
         sC_gene = df['Max_Pct_10d'] > 8.0
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
         sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol
 
-        # 战法D: 均线粘合向上 (MA5,10,20纠缠后一阳穿三线)
+        # 战法D: 均线粘合
         ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
         ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
         sD_squeeze = (ma_max - ma_min) / ma_min < 0.03 
         sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 3.0)
         df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up
         
-        # 🚀 战法E: 龙头断板分歧 (昨日大涨，今日剧烈换手分歧，博二波)
+        # 战法E: 龙头断板分歧
         sE_gene = df['Pct_Chg_Shift1'] > 9.0
         sE_pct = (df['涨跌幅'] > -5.0) & (df['涨跌幅'] < 4.0)
         sE_vol = df['成交量'] > df['Vol_MA5'] * 1.5
         df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol
         
-        # 🚀 战法F: N字反包形态 (大阳线后连续两天缩量洗盘不破位，今日企稳)
+        # 战法F: N字反包
         sF_day3 = df['Pct_Chg_Shift3'] > 6.0
         sF_day21 = (df['Pct_Chg_Shift2'] < 2.0) & (df['Pct_Chg_Shift1'] < 2.0) & (df['收盘'].shift(1) > df['Open_Shift3'])
         sF_today = df['涨跌幅'] > 0
         sF_vol = df['成交量'] < df['Vol_Shift3']
         df['Sig_F_N_Shape'] = sF_day3 & sF_day21 & sF_today & sF_vol
         
-        # 🚀 战法G: 百日新高突破 (放量突破前高无套牢盘，主升浪启动)
+        # 战法G: 新高突破
         sG_high = df['收盘'] >= df['High_120d_shift']
         sG_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sG_pct = df['涨跌幅'] > 4.0
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct
         
-        # 🚀 战法H: 极致缩量双底 (W底形态，二探底背离)
+        # 战法H: 缩量双底
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
-        sH_macd = df['MACD'] > df['MACD'].shift(5) # 价格低位但MACD抬升
+        sH_macd = df['MACD'] > df['MACD'].shift(5)
         sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
         df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol
 
@@ -403,7 +393,6 @@ class ReboundScreener:
 
         today_str = datetime.now().strftime('%Y-%m-%d')
         
-        # ==================== 1. AI 耻辱柱 (打脸处刑台) ====================
         review_html = ""
         if review_records:
             avg_ret = recent_stats.get('avg_ret', 0.0)
@@ -432,7 +421,6 @@ class ReboundScreener:
                 """
             review_html += "</table><hr>"
 
-        # ==================== 2. 大数据赛马榜 (8大策略) ====================
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
             <h3 style="margin-top: 0; color: #2980b9;">🏇 八路诸侯波段赛马榜 (近250交易日全景回测)</h3>
@@ -469,7 +457,6 @@ class ReboundScreener:
             """
         tournament_html += "</table></div>"
 
-        # ==================== 3. 今日金股 ====================
         top5_html = ""
         if ai_data and "top_5" in ai_data and len(ai_data["top_5"]) > 0:
             top5_html += f"""
@@ -552,7 +539,6 @@ class ReboundScreener:
         df = self.get_market_spot()
         if df.empty: return
             
-        # 🚀 获取前期选股复盘结果和打脸数据
         review_summary, review_records, recent_stats = self.process_review_and_history(df, lookback_days=5)
             
         logger.info("👉 执行活跃资金池初筛...")
@@ -577,10 +563,10 @@ class ReboundScreener:
             df = df[(df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 500_0000_0000)]
         df = df[df['amount'] >= 200000000]
         
-        candidates = df.sort_values(by='amount', ascending=False).head(180)
+        # 🚀 降低选股池到100只，配合终极熔断，彻底防卡死！
+        candidates = df.sort_values(by='amount', ascending=False).head(100)
         logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动八大波段战法极速矩阵推演...")
 
-        # 八大门派赛马统计看板
         tournament_stats = {
             '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
             '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'max_gains': []},
@@ -596,27 +582,35 @@ class ReboundScreener:
         total_c = len(candidates)
         lookback_days = 250
         
+        # 🚀 终极熔断计数器
+        consecutive_errors = 0
+        
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
-            if i % 40 == 0: logger.info(f"⏳ 12个月八大矩阵推演中... 进度: {i} / {total_c}")
+            if consecutive_errors >= 6:
+                logger.error("🚨 连续6次获取K线失败！已触发防爬虫封锁！启动【终极熔断】，直接跳过剩余标的！")
+                break
+                
+            if i % 20 == 0: logger.info(f"⏳ 12个月八大矩阵推演中... 进度: {i} / {total_c}")
                 
             code = row['code']
             name = row['name']
             try:
                 df_kline = self._get_daily_kline(code)
-                if df_kline is None or len(df_kline) < 60: continue
+                if df_kline is None or len(df_kline) < 60: 
+                    consecutive_errors += 1
+                    time.sleep(1)
+                    continue
+                    
+                consecutive_errors = 0 # 成功则重置计数器
                 
                 tech_df = self.calculate_technical_indicators(df_kline)
                 sig_df = self.evaluate_strategies(tech_df)
                 
-                # ==========================================
-                # 🚀 引入 5日波段收益 矩阵运算
-                # ==========================================
                 actual_lookback = min(lookback_days, len(sig_df) - 60)
                 if actual_lookback < 10: continue 
                 
                 test_df = sig_df.iloc[-(actual_lookback+5):-5].copy()
                 
-                # 5日波段利润与最高冲高
                 test_df['Ret_5D'] = ((test_df['Close_T5'] - test_df['收盘']) / test_df['收盘'] - 0.003) * 100
                 test_df['Max_Gain'] = ((test_df['High_5D'] - test_df['收盘']) / test_df['收盘']) * 100
                 
@@ -642,7 +636,6 @@ class ReboundScreener:
                             tournament_stats[s_key]['max_gains'].extend(valid_maxs.tolist())
                             tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
                 
-                # 收集今日触发情况
                 last = sig_df.iloc[-1]
                 v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
                 
@@ -656,9 +649,6 @@ class ReboundScreener:
                 time.sleep(random.uniform(0.05, 0.1))
             except Exception: continue
 
-        # =========================================================
-        # 🏆 结算赛马结果，挑选12月度“全能王波段策略”
-        # =========================================================
         best_strategy = None
         best_score = -9999
         best_reason = ""
@@ -683,9 +673,6 @@ class ReboundScreener:
 
         logger.info(f"🏆 今日加冕八大门派总冠军: 【{best_strategy}】 ({best_reason})")
 
-        # =========================================================
-        # 🎯 用冠军策略筛选今日标的
-        # =========================================================
         final_pool = []
         sig_map = {
             '战法A: 趋势低吸': 'sig_A', '战法B: 底部起爆': 'sig_B',
@@ -715,7 +702,6 @@ class ReboundScreener:
         ai_result = None
         if final_top_stocks:
             macro_news = self.fetch_macro_news()
-            # 传入 review_summary (打脸复盘)
             ai_result = self.ai_select_top5(final_top_stocks, macro_news, best_strategy, best_reason, review_summary)
             
             if ai_result and "top_5" in ai_result and len(ai_result["top_5"]) > 0:
