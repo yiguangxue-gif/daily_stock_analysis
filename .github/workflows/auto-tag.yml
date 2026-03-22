@@ -1,12 +1,12 @@
-name: 🚀 A股AI自进化选股雷达
+name: A股AI自进化选股雷达
 
 on:
   schedule:
-    # 每天北京时间 02:10 运行 (UTC 前一日 18:10)
-    - cron: '10 06 * * 1-5'
-  workflow_dispatch: # 允许手动点击运行
+    # 每天北京时间 15:30 左右运行 (UTC 7:30)
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
 
-# 【极其关键】：赋予机器人提交代码的写权限
+# 赋予机器人提交代码的写权限
 permissions:
   contents: write
 
@@ -14,37 +14,38 @@ jobs:
   run-screener:
     runs-on: ubuntu-latest
     
-    # 映射环境变量，Python 才能读取并发邮件
+    # 把 Secrets 映射到环境变量
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
       EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
 
     steps:
-    - name: 📥 检出代码
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: 🐍 设置 Python 环境
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
 
-    - name: 📦 安装依赖
-      run: |
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        pip install akshare pandas numpy json-repair
-    - name: 🎯 运行量化选股雷达
-      run: |
-        python -m src.screener
-    # 👇👇 终极修复：加了 -f 参数，强制无视 gitignore 写入 AI 记忆 👇👇
-    - name: 💾 Commit and push AI Memory
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        git add -f data/
-        # 如果 data 文件夹没变化，就跳过不报错
-        git commit -m "🤖 Auto-update AI memory and history" || echo "No new lessons to commit"
-        git push
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install akshare pandas numpy json-repair tushare
+
+      - name: Run Screener
+        run: |
+          python -m src.screener
+
+      - name: Commit and push AI Memory
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -f data/
+          git commit -m "Auto-update AI memory and history" || echo "No new lessons to commit"
+          git push
