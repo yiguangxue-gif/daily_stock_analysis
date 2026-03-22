@@ -844,18 +844,26 @@ class ReboundScreener:
                 stats['ev'] = expectancy
                 
                 # 提取历史该策略的真实表现
-                s_key_short = s_name.split(':')[0] # 提取如 "战法C"
+                s_key_short = s_name.split(':')[0].strip() # 提取如 "战法C"
+                s_core_name = s_name.split(':')[1].strip() if ':' in s_name else s_name # 提取如 "强庄首阴"
                 real_win_rate_multiplier = 1.0 # 默认不奖不惩
                 
+                # 🚀 修复：兼容老版本的CSV记录，只要包含"战法C"或者"强庄首阴"全部合并统计！
+                total_real_count = 0
+                total_real_wins = 0.0
+                
                 for r_sname, r_perf in strategy_real_performance.items():
-                    if s_key_short in r_sname:
-                        real_count = r_perf['count']
-                        if real_count >= 3: # 至少有3次实盘样本
-                            r_win_rate = r_perf['win_rate'] / 100.0
-                            stats['real_win_rate'] = r_win_rate
-                            # 实盘胜率如果极低(<35%)，将对期望值进行致命扣减！
-                            real_win_rate_multiplier = max(0.1, (r_win_rate + 0.5)) 
-                        break
+                    # 完美兼容老版 [强庄首阴] 和 新版 [🥇 战法C: 强庄首阴]
+                    if s_key_short in str(r_sname) or s_core_name in str(r_sname):
+                        total_real_count += r_perf['count']
+                        total_real_wins += (r_perf['win_rate'] / 100.0) * r_perf['count']
+
+                # 如果合并后该战法的历史买入次数大于等于 3 次 (如嫌太严可改为 1 或 2)，才予以认可
+                if total_real_count >= 3: 
+                    r_win_rate = total_real_wins / total_real_count
+                    stats['real_win_rate'] = r_win_rate
+                    # 实盘胜率如果极低(<35%)，将对期望值进行致命扣减！
+                    real_win_rate_multiplier = max(0.1, (r_win_rate + 0.5)) 
 
                 # 实盘打脸熔断
                 if stats['real_win_rate'] >= 0 and stats['real_win_rate'] < 0.35:
