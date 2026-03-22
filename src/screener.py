@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (霸体终极版)
+A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (不死鸟四重护盾版)
 ===================================
 
 核心重构:
-1. 【解开护盾束缚】：放宽防量化收割条件，修复均线 NaN 屏蔽，满血恢复数千次双盲回测样本。
-2. 【实盘胜率穿透】：只要历史买过1次，强制展示真实打脸胜率，消灭“样本不足”盲区！
-3. 【老名称无损融合】：智能识别旧版 CSV 里的 [强庄首阴]、[缩量回踩低吸]，完美对齐新版八大门派。
+1. 【不死鸟四重数据源】：彻底废除断网自杀机制。东方财富 -> Tushare VIP -> 网易163 -> 新浪，四重降维打击，绝不卡死，拒绝全0！
+2. 【NaN 免疫修复】：修复防收割指标底层出现的 NaN 连带误杀，找回真实回测数据量。
+3. 【实盘胜率融合】：完美保留昨天的实盘打脸降维惩罚系统与期望值(EV)核心。
 """
 
 import os
@@ -42,6 +42,7 @@ from src.config import get_config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
+# 放宽基础超时时间，给多重备用接口留足反应时间
 socket.setdefaulttimeout(15.0)
 
 class ReboundScreener:
@@ -123,23 +124,64 @@ class ReboundScreener:
         return True, "大盘趋势未知，按中性对待。"
 
     def _get_daily_kline(self, code):
+        """🚀 终极四重不死鸟护盾，确保历史数据必达"""
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
+        end_date = datetime.now().strftime('%Y%m%d')
+        
+        # 1. 尝试 东方财富
         try:
-            return self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, adjust="qfq")
-        except Exception: pass
+            df = self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, adjust="qfq")
+            if df is not None and not df.empty and '日期' in df.columns:
+                return df
+        except: pass
+
+        # 2. 尝试 Tushare VIP (最高质量保障)
+        if self.pro:
+            try:
+                import tushare as ts
+                ts_code = f"{code}.SH" if code.startswith('6') else f"{code}.SZ"
+                df_ts = ts.pro_bar(ts_code=ts_code, adj='qfq', start_date=start_date, end_date=end_date)
+                if df_ts is not None and not df_ts.empty:
+                    df_ts = df_ts.sort_values('trade_date').reset_index(drop=True)
+                    res = pd.DataFrame()
+                    res['日期'] = pd.to_datetime(df_ts['trade_date'])
+                    res['收盘'] = df_ts['close']
+                    res['开盘'] = df_ts['open']
+                    res['最高'] = df_ts['high']
+                    res['最低'] = df_ts['low']
+                    res['成交量'] = df_ts['vol'] * 100 
+                    return res
+            except: pass
+
+        # 3. 尝试 网易财经 163
         try:
-            symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
-            df = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=0.5, symbol=symbol_sina, start_date=start_date, adjust="qfq")
-            if df is not None and not df.empty:
+            df_163 = self._fetch_with_retry(ak.stock_zh_a_hist_163, retries=1, delay=0.5, symbol=code, start_date=start_date, end_date=end_date)
+            if df_163 is not None and not df_163.empty:
                 res = pd.DataFrame()
-                res['日期'] = df['date']
-                res['收盘'] = df['close']
-                res['开盘'] = df['open']
-                res['最高'] = df['high']
-                res['最低'] = df['low']
-                res['成交量'] = df['volume']
+                res['日期'] = pd.to_datetime(df_163['日期'])
+                res['收盘'] = df_163['收盘价']
+                res['开盘'] = df_163['开盘价']
+                res['最高'] = df_163['最高价']
+                res['最低'] = df_163['最低价']
+                res['成交量'] = df_163['成交量']
                 return res
         except: pass
+
+        # 4. 尝试 新浪财经兜底
+        try:
+            symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
+            df_sina = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=0.5, symbol=symbol_sina, start_date=start_date, adjust="qfq")
+            if df_sina is not None and not df_sina.empty:
+                res = pd.DataFrame()
+                res['日期'] = pd.to_datetime(df_sina['date'])
+                res['收盘'] = df_sina['close']
+                res['开盘'] = df_sina['open']
+                res['最高'] = df_sina['high']
+                res['最低'] = df_sina['low']
+                res['成交量'] = df_sina['volume']
+                return res
+        except: pass
+        
         return None
 
     def fetch_macro_news(self):
@@ -308,8 +350,10 @@ class ReboundScreener:
         
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
-        df['Avg_Body_5d'] = df['Body'].rolling(5).mean() + 0.001
-        df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5).mean()
+        
+        # 🚀 NaN 免疫修复：填补计算初期的空值，防止连带误杀
+        df['Avg_Body_5d'] = df['Body'].rolling(5, min_periods=1).mean().fillna(0.001) + 0.001
+        df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5, min_periods=1).mean().fillna(0)
 
         df['Close_T5'] = df['收盘'].shift(-5)
         df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
@@ -324,13 +368,9 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # 🚀 放宽基础健康过滤：允许弱势盘整，防止误杀导致0回测
+        # NaN 免疫护盾：用 fillna 确保数据不断链
         s_momentum_ok = df['Ret_20d'].fillna(0) > -15.0 
-        
-        # 🚀 放宽防量化护盾：允许上影线达到实体的 3 倍（A股常态洗盘）
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
-        
-        # 🚀 放宽布林带过热防守：突破上轨 5% 才算绝对泡沫
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
         
         global_shield = s_momentum_ok & s_anti_harvest & s_not_overbought
@@ -338,7 +378,7 @@ class ReboundScreener:
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
         sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
-        sA_cpv = df['CPV'] > 0.2 # 只要不是极端的死在最低点即可
+        sA_cpv = df['CPV'] > 0.2 
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
@@ -420,7 +460,7 @@ class ReboundScreener:
 {cand_text}
 
 ### 🎯 你的任务：
-1. 结合“红黑榜历史教训”和“大盘环境”，在 `ai_reflection` 里进行极其深刻的反省（为什么最惨的票会亏？是不是追高了或者接飞刀了？）
+1. 结合“红黑榜历史教训”和“大盘环境”，在 `ai_reflection` 里进行极其深刻的反省。
 2. 优选最多 5 只股票（如果大盘破位或觉得备选池都是垃圾，你可以只输出 1 只甚至 0 只！绝对不要凑数！）
 3. 设定严格的 `stop_loss`。
 4. 严禁在输出文本中自行编造或添加形如 [2026-xx-xx] 的日期。
@@ -721,8 +761,9 @@ class ReboundScreener:
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
             if consecutive_errors >= 10:
-                logger.error("🚨 连续10次获取K线失败！触发终极网络熔断，跳过剩余！")
-                break
+                logger.warning("🚨 连续10次获取K线失败！触发休眠退让机制，暂停 10 秒...")
+                time.sleep(10)
+                consecutive_errors = 0 # 放下屠刀，不再直接 break 中断全盘！
                 
             if i % 20 == 0: logger.info(f"⏳ 真实执行(EV)矩阵推演中... 进度: {i} / {total_c}")
                 
