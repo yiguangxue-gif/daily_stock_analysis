@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 全景实盘追踪 + AI红黑榜自我进化 (最终幻想版)
+A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (霸体终极版)
 ===================================
 
 核心重构:
-1. 【全生命周期实盘追踪】：自动核算历史所有金股的真实盈亏。买入超7天强制锁定平仓，未满7天动态计算浮盈。
-2. 【红黑榜投喂 AI】：将历史赚得最多和亏得最惨的 Top3 标的直接喂给大模型，逼迫 AI 提取失败教训和成功基因！
-3. 【实盘纠偏回测】：若某策略在实盘中屡战屡败，强制扣减其双盲回测评分，彻底消灭“纸上谈兵”。
+1. 【解开护盾束缚】：放宽防量化收割条件，修复均线 NaN 屏蔽，满血恢复数千次双盲回测样本。
+2. 【实盘胜率穿透】：只要历史买过1次，强制展示真实打脸胜率，消灭“样本不足”盲区！
+3. 【老名称无损融合】：智能识别旧版 CSV 里的 [强庄首阴]、[缩量回踩低吸]，完美对齐新版八大门派。
 """
 
 import os
@@ -42,7 +42,7 @@ from src.config import get_config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-socket.setdefaulttimeout(6.0)
+socket.setdefaulttimeout(15.0)
 
 class ReboundScreener:
     def __init__(self):
@@ -174,10 +174,6 @@ class ReboundScreener:
         except: pass
 
     def process_review_and_history(self, market_df, lookback_batches=5):
-        """
-        🚀 全局实盘推演引擎
-        不仅计算最近 5 批次，还会计算自上线以来的所有股票真实表现，并提取红黑榜
-        """
         today_date = datetime.now()
         today_str = today_date.strftime('%Y-%m-%d')
         
@@ -195,17 +191,14 @@ class ReboundScreener:
             if df_hist.empty: return "", review_records, recent_stats, global_stats, ai_feedback_data, strategy_real_performance
             
             df_hist['Realized_Ret'] = np.nan
-            
             logger.info(f"🔍 正在执行全局沙盘推演，核算历史所有金股真实盈亏...")
             
-            # 建立今日价格字典加速查询
             today_prices = market_df.set_index('code')['close'].to_dict()
             
             for idx, row in df_hist.iterrows():
                 code = str(row['Code']).zfill(6)
                 t0_price = float(row['Price_T0'])
                 
-                # 如果该笔交易还未正式平仓
                 if pd.isna(row.get('Date_T1')) or str(row.get('Date_T1')).strip() == '':
                     try:
                         t0_date = datetime.strptime(str(row['Date_T0']), '%Y-%m-%d')
@@ -216,37 +209,28 @@ class ReboundScreener:
                         curr_p = float(today_prices[code])
                         ret_pct = ((curr_p - t0_price) / t0_price) * 100
                         
-                        # 波段强制纪律：超过7个自然日（约5个交易日）强制按今日价格平仓结算！
                         if days_held >= 7:
                             df_hist.at[idx, 'Date_T1'] = today_str
                             df_hist.at[idx, 'Price_T1'] = curr_p
                             df_hist.at[idx, 'Return_Pct'] = round(ret_pct, 2)
                             df_hist.at[idx, 'Realized_Ret'] = ret_pct
                         else:
-                            # 没到平仓时间，记录浮盈，不写入CSV的Date_T1
                             df_hist.at[idx, 'Floating_Ret'] = round(ret_pct, 2)
                             df_hist.at[idx, 'Realized_Ret'] = ret_pct
                 else:
-                    # 已经平仓的历史单子
                     if pd.notna(row.get('Return_Pct')):
                         df_hist.at[idx, 'Realized_Ret'] = float(row['Return_Pct'])
             
-            # 保存被强制平仓的更新
             df_hist.drop(columns=['Floating_Ret', 'Realized_Ret'], errors='ignore').to_csv(self.history_file, index=False)
             
-            # 1. 提取策略名字用于按策略统计
             df_hist['Strategy_Name'] = df_hist['AI_Reason'].astype(str).str.extract(r'\[(.*?)\]')
-            
-            # 剔除无效数据
             valid_df = df_hist.dropna(subset=['Realized_Ret']).copy()
             
             if not valid_df.empty:
-                # 2. 全局历史统计
                 global_stats['total_trades'] = len(valid_df)
                 global_stats['win_rate'] = (valid_df['Realized_Ret'] > 0).mean() * 100
                 global_stats['avg_ret'] = valid_df['Realized_Ret'].mean()
                 
-                # 3. 策略实盘红黑榜
                 strat_group = valid_df.groupby('Strategy_Name')['Realized_Ret'].agg(['count', 'mean', lambda x: (x>0).mean()*100]).reset_index()
                 strat_group.columns = ['Strategy', 'Count', 'Avg_Ret', 'Win_Rate']
                 for _, s_row in strat_group.iterrows():
@@ -254,13 +238,11 @@ class ReboundScreener:
                         'count': s_row['Count'], 'win_rate': s_row['Win_Rate'], 'avg_ret': s_row['Avg_Ret']
                     }
                 
-                # 4. 提取喂给AI的红黑榜 Top 3
                 best_3 = valid_df.nlargest(3, 'Realized_Ret')
                 worst_3 = valid_df.nsmallest(3, 'Realized_Ret')
                 ai_feedback_data['best'] = best_3[['Name', 'Strategy_Name', 'Realized_Ret']].to_dict('records')
                 ai_feedback_data['worst'] = worst_3[['Name', 'Strategy_Name', 'Realized_Ret']].to_dict('records')
                 
-                # 5. 近期批次统计 (供邮件展示)
                 recent_dates = sorted(valid_df['Date_T0'].unique())[-lookback_batches:]
                 recent_records = valid_df[valid_df['Date_T0'].isin(recent_dates)]
                 
@@ -277,11 +259,9 @@ class ReboundScreener:
                     for date in recent_dates:
                         day_df = recent_records[recent_records['Date_T0'] == date]
                         for _, r in day_df.iterrows():
-                            # 修复：计算并补充缺失的“当前价”字段
                             t0_p = float(r['Price_T0'])
                             ret_val = float(r['Realized_Ret'])
                             curr_p = r.get('Price_T1')
-                            # 如果还没正式平仓（没有固定价格），根据盈亏自动推算当前浮动价
                             if pd.isna(curr_p) or str(curr_p).strip() == '':
                                 curr_p = t0_p * (1 + ret_val / 100)
                                 
@@ -344,28 +324,34 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        s_momentum_ok = df['Ret_20d'] > -8.0 
-        s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 1.5)
-        s_not_overbought = df['收盘'] < (df['BB_Up'] * 1.02)
+        # 🚀 放宽基础健康过滤：允许弱势盘整，防止误杀导致0回测
+        s_momentum_ok = df['Ret_20d'].fillna(0) > -15.0 
+        
+        # 🚀 放宽防量化护盾：允许上影线达到实体的 3 倍（A股常态洗盘）
+        s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
+        
+        # 🚀 放宽布林带过热防守：突破上轨 5% 才算绝对泡沫
+        s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
+        
         global_shield = s_momentum_ok & s_anti_harvest & s_not_overbought
         
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
         sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
-        sA_cpv = df['CPV'] > 0.3 
+        sA_cpv = df['CPV'] > 0.2 # 只要不是极端的死在最低点即可
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
         sB_break = df['收盘'] > df['MA60']
         sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sB_pct = df['涨跌幅'] > 4.0
-        sB_cpv = df['CPV'] > 0.65 
+        sB_cpv = df['CPV'] > 0.6 
         df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & global_shield
 
         sC_gene = df['Max_Pct_10d'] > 8.0
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
         sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
-        sC_cpv = df['CPV'] > 0.25 
+        sC_cpv = df['CPV'] > 0.2
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
 
         ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
@@ -408,7 +394,6 @@ class ReboundScreener:
         for c in candidates:
             cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | K线重心:{c['重心CPV']}\n"
 
-        # 🚀 构建喂给 AI 的毒药和蜜糖 (红黑榜)
         worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
         best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
 
@@ -492,7 +477,6 @@ class ReboundScreener:
         </div>
         """
 
-        # 🚀 全景实盘推演统计墙
         global_ret = global_stats.get('avg_ret', 0.0)
         g_color = "red" if global_ret > 0 else "green"
         review_html = f"""
@@ -571,7 +555,6 @@ class ReboundScreener:
                 
             color_ev = "red" if ev > 0 and not is_banned else "green" if ev <= 0 and not is_banned else "gray"
             
-            # 显示实盘胜率，如果有的话
             real_win_str = f"{real_win_rate*100:.1f}%" if real_win_rate >= 0 else "样本不足"
             if real_win_rate >= 0 and real_win_rate < 0.35: real_win_str = f"<span style='color:green;font-weight:bold;'>{real_win_str} (严重失真)</span>"
             
@@ -679,7 +662,6 @@ class ReboundScreener:
         df = self.get_market_spot()
         if df.empty: return
             
-        # 🚀 获取历史全生命周期推演数据和红黑榜
         review_summary, review_records, recent_stats, global_stats, ai_feedback_data, strategy_real_performance = self.process_review_and_history(df, lookback_batches=5)
             
         logger.info("👉 执行全市场流动性与风口感知...")
@@ -738,8 +720,8 @@ class ReboundScreener:
         consecutive_errors = 0
         
         for i, (idx, row) in enumerate(candidates.iterrows(), 1):
-            if consecutive_errors >= 6:
-                logger.error("🚨 连续6次获取K线失败！触发终极熔断，跳过剩余！")
+            if consecutive_errors >= 10:
+                logger.error("🚨 连续10次获取K线失败！触发终极网络熔断，跳过剩余！")
                 break
                 
             if i % 20 == 0: logger.info(f"⏳ 真实执行(EV)矩阵推演中... 进度: {i} / {total_c}")
@@ -748,12 +730,17 @@ class ReboundScreener:
             name = row['name']
             try:
                 df_kline = self._get_daily_kline(code)
-                if df_kline is None or len(df_kline) < 60: 
+                
+                if df_kline is None or df_kline.empty: 
                     consecutive_errors += 1
                     time.sleep(1)
                     continue
                     
-                consecutive_errors = 0
+                consecutive_errors = 0 
+                
+                if len(df_kline) < 60:
+                    continue 
+                    
                 tech_df = self.calculate_technical_indicators(df_kline)
                 sig_df = self.evaluate_strategies(tech_df)
                 
@@ -828,48 +815,44 @@ class ReboundScreener:
             trades = stats['trades']
             trades_15d = stats['trades_15d']
             
-            # 初始化默认实盘胜率标记
             stats['real_win_rate'] = -1.0
             
+            # 🚀 提出来的全局兼容实盘匹配逻辑
+            s_key_short = s_name.split(':')[0].strip() 
+            s_core_name = s_name.split(':')[1].strip() if ':' in s_name else s_name 
+            
+            total_real_count = 0
+            total_real_wins = 0.0
+            
+            for r_sname, r_perf in strategy_real_performance.items():
+                if s_key_short in str(r_sname) or s_core_name in str(r_sname) or ("首阴" in str(r_sname) and "首阴" in s_core_name) or ("低吸" in str(r_sname) and "低吸" in s_core_name):
+                    total_real_count += r_perf['count']
+                    total_real_wins += (r_perf['win_rate'] / 100.0) * r_perf['count']
+
+            if total_real_count >= 1: 
+                r_win_rate = total_real_wins / total_real_count
+                stats['real_win_rate'] = r_win_rate
+
             if trades >= 10: 
                 win_rate = stats['wins'] / trades
                 avg_ret = sum(stats['returns']) / trades
                 win_rate_15d = stats['wins_15d'] / trades_15d if trades_15d > 0 else 0
                 
-                # 🚀 华尔街EV公式
                 avg_win_ret = sum([r for r in stats['returns'] if r > 0]) / stats['wins'] if stats['wins'] > 0 else 0.02
                 avg_loss_ret = abs(sum([r for r in stats['returns'] if r <= 0]) / (trades - stats['wins'])) if (trades - stats['wins']) > 0 else 0.05
                 
                 expectancy = (win_rate * avg_win_ret) - ((1 - win_rate) * avg_loss_ret)
                 stats['ev'] = expectancy
                 
-                # 提取历史该策略的真实表现
-                s_key_short = s_name.split(':')[0].strip() # 提取如 "战法C"
-                s_core_name = s_name.split(':')[1].strip() if ':' in s_name else s_name # 提取如 "强庄首阴"
-                real_win_rate_multiplier = 1.0 # 默认不奖不惩
+                real_win_rate_multiplier = 1.0 
                 
-                # 🚀 修复：兼容老版本的CSV记录，只要包含"战法C"或者"强庄首阴"全部合并统计！
-                total_real_count = 0
-                total_real_wins = 0.0
+                if stats['real_win_rate'] >= 0:
+                    real_win_rate_multiplier = max(0.1, (stats['real_win_rate'] + 0.5)) 
+                    if stats['real_win_rate'] < 0.35:
+                        stats['is_banned'] = True
+                        logger.warning(f"🚫 实盘熔断: 【{s_name}】 实盘给用户造成巨大亏损，真实胜率仅 {stats['real_win_rate']*100:.1f}%，永久拉黑！")
                 
-                for r_sname, r_perf in strategy_real_performance.items():
-                    # 完美兼容老版 [强庄首阴] 和 新版 [🥇 战法C: 强庄首阴]
-                    if s_key_short in str(r_sname) or s_core_name in str(r_sname):
-                        total_real_count += r_perf['count']
-                        total_real_wins += (r_perf['win_rate'] / 100.0) * r_perf['count']
-
-                # 如果合并后该战法的历史买入次数大于等于 3 次 (如嫌太严可改为 1 或 2)，才予以认可
-                if total_real_count >= 3: 
-                    r_win_rate = total_real_wins / total_real_count
-                    stats['real_win_rate'] = r_win_rate
-                    # 实盘胜率如果极低(<35%)，将对期望值进行致命扣减！
-                    real_win_rate_multiplier = max(0.1, (r_win_rate + 0.5)) 
-
-                # 实盘打脸熔断
-                if stats['real_win_rate'] >= 0 and stats['real_win_rate'] < 0.35:
-                    stats['is_banned'] = True
-                    logger.warning(f"🚫 实盘熔断: 【{s_name}】 实盘给用户造成巨大亏损，真实胜率仅 {stats['real_win_rate']*100:.1f}%，永久拉黑！")
-                elif trades_15d >= 3 and win_rate_15d < 0.35:
+                if trades_15d >= 3 and win_rate_15d < 0.35:
                     stats['is_banned'] = True
                     logger.warning(f"🚫 短线熔断: 【{s_name}】 近期15天胜率仅为 {win_rate_15d*100:.1f}%，剥夺资格！")
                 
@@ -880,7 +863,6 @@ class ReboundScreener:
                     kelly_fraction = kelly_fraction * 0.5 
                 kelly_pct = max(0, min(1.0, kelly_fraction)) * 100
                 
-                # 最终得分 = 理论EV期望 * (实盘验证倍数)
                 base_score = expectancy * 0.4 + (win_rate_15d * avg_win_ret - (1-win_rate_15d)*avg_loss_ret) * 0.6 if trades_15d > 0 else expectancy * 0.5
                 final_score = base_score * real_win_rate_multiplier
                 
@@ -895,6 +877,13 @@ class ReboundScreener:
                         'name': s_name, 'score': final_score, 'trades': trades,
                         'win_rate': win_rate, 'avg_ret': avg_ret, 'ev': expectancy
                     })
+            else:
+                stats['score'] = 0.0
+                stats['ev'] = 0.0
+                stats['win_rate'] = 0.0
+                stats['avg_ret'] = 0.0
+                stats['win_rate_15d'] = 0.0
+                stats['kelly_pct'] = 0.0
         
         ranked_strategies.sort(key=lambda x: x['score'], reverse=True)
         
