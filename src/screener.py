@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (不死鸟四重护盾版)
+A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (解除封印满血版)
 ===================================
 
 核心重构:
-1. 【不死鸟四重数据源】：彻底废除断网自杀机制。东方财富 -> Tushare VIP -> 网易163 -> 新浪，四重降维打击，绝不卡死，拒绝全0！
-2. 【NaN 免疫修复】：修复防收割指标底层出现的 NaN 连带误杀，找回真实回测数据量。
-3. 【实盘胜率融合】：完美保留昨天的实盘打脸降维惩罚系统与期望值(EV)核心。
+1. 【解除严苛封印】：剔除导致 0 信号的过度防守（如CPV重心、防收割比例），让八大战法恢复正常的触发频率，释放真实回测数据。
+2. 【异常报警器】：引入内部错误追踪打印，告别静默失败。
+3. 【数据源无缝降维】：修复网易163备用接口的股票代码前缀问题。
 """
 
 import os
@@ -42,7 +42,6 @@ from src.config import get_config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# 放宽基础超时时间，给多重备用接口留足反应时间
 socket.setdefaulttimeout(15.0)
 
 class ReboundScreener:
@@ -124,18 +123,15 @@ class ReboundScreener:
         return True, "大盘趋势未知，按中性对待。"
 
     def _get_daily_kline(self, code):
-        """🚀 终极四重不死鸟护盾，确保历史数据必达"""
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
         end_date = datetime.now().strftime('%Y%m%d')
         
-        # 1. 尝试 东方财富
         try:
-            df = self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, adjust="qfq")
+            df = self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
             if df is not None and not df.empty and '日期' in df.columns:
                 return df
         except: pass
 
-        # 2. 尝试 Tushare VIP (最高质量保障)
         if self.pro:
             try:
                 import tushare as ts
@@ -153,9 +149,10 @@ class ReboundScreener:
                     return res
             except: pass
 
-        # 3. 尝试 网易财经 163
+        symbol_prefix = f"sh{code}" if code.startswith('6') else f"sz{code}"
+
         try:
-            df_163 = self._fetch_with_retry(ak.stock_zh_a_hist_163, retries=1, delay=0.5, symbol=code, start_date=start_date, end_date=end_date)
+            df_163 = self._fetch_with_retry(ak.stock_zh_a_hist_163, retries=1, delay=0.5, symbol=symbol_prefix, start_date=start_date, end_date=end_date)
             if df_163 is not None and not df_163.empty:
                 res = pd.DataFrame()
                 res['日期'] = pd.to_datetime(df_163['日期'])
@@ -167,10 +164,8 @@ class ReboundScreener:
                 return res
         except: pass
 
-        # 4. 尝试 新浪财经兜底
         try:
-            symbol_sina = f"sh{code}" if code.startswith('6') else f"sz{code}"
-            df_sina = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=0.5, symbol=symbol_sina, start_date=start_date, adjust="qfq")
+            df_sina = self._fetch_with_retry(ak.stock_zh_a_daily, retries=1, delay=0.5, symbol=symbol_prefix, start_date=start_date, adjust="qfq")
             if df_sina is not None and not df_sina.empty:
                 res = pd.DataFrame()
                 res['日期'] = pd.to_datetime(df_sina['date'])
@@ -333,11 +328,6 @@ class ReboundScreener:
         df['MA60'] = df['收盘'].rolling(60).mean()
         df['Vol_MA5'] = df['成交量'].rolling(5).mean()
         
-        df['Ret_20d'] = df['收盘'].pct_change(20) * 100
-        
-        df['Std_20'] = df['收盘'].rolling(20).std()
-        df['BB_Up'] = df['MA20'] + 2 * df['Std_20']
-        
         df['prev_close'] = df['收盘'].shift(1)
         tr1 = df['最高'] - df['最低']
         tr2 = (df['最高'] - df['prev_close']).abs()
@@ -345,20 +335,20 @@ class ReboundScreener:
         df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['ATR'] = df['TR'].rolling(14, min_periods=1).mean()
         df['ATR_Pct'] = (df['ATR'] / df['收盘']) * 100
-        
-        df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
-        
-        df['Body'] = abs(df['收盘'] - df['开盘'])
-        df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
-        
-        # 🚀 NaN 免疫修复：填补计算初期的空值，防止连带误杀
-        df['Avg_Body_5d'] = df['Body'].rolling(5, min_periods=1).mean().fillna(0.001) + 0.001
-        df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5, min_periods=1).mean().fillna(0)
+
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        df['MACD_DIF'] = exp1 - exp2
+        df['MACD_DEA'] = df['MACD_DIF'].ewm(span=9, adjust=False).mean()
+        df['MACD'] = 2 * (df['MACD_DIF'] - df['MACD_DEA'])
 
         df['Close_T5'] = df['收盘'].shift(-5)
         df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
         df['Low_5D'] = df['最低'].shift(-1)[::-1].rolling(5, min_periods=1).min()[::-1]
         
+        df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
+        df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
+        df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
         df['Pct_Chg_Shift1'] = df['涨跌幅'].shift(1)
         df['Pct_Chg_Shift2'] = df['涨跌幅'].shift(2)
         df['Pct_Chg_Shift3'] = df['涨跌幅'].shift(3)
@@ -368,59 +358,57 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # NaN 免疫护盾：用 fillna 确保数据不断链
-        s_momentum_ok = df['Ret_20d'].fillna(0) > -15.0 
-        s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
-        s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
+        # 🚀 回归纯粹，卸下会导致全 0 的多余紧身衣护盾，让八大门派火力全开！
         
-        global_shield = s_momentum_ok & s_anti_harvest & s_not_overbought
-        
+        # 战法A: 趋势低吸
         sA_trend = df['MA20'] > df['MA60']
-        sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
-        sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
-        sA_cpv = df['CPV'] > 0.2 
-        df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
+        sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.04
+        sA_vol = df['成交量'] < df['Vol_MA5'] * 0.9
+        df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol
 
+        # 战法B: 底部起爆
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
         sB_break = df['收盘'] > df['MA60']
-        sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
-        sB_pct = df['涨跌幅'] > 4.0
-        sB_cpv = df['CPV'] > 0.6 
-        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & global_shield
+        sB_vol = df['成交量'] > df['Vol_MA5'] * 1.5
+        sB_pct = df['涨跌幅'] > 3.5
+        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct
 
-        sC_gene = df['Max_Pct_10d'] > 8.0
-        sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
-        sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
-        sC_cpv = df['CPV'] > 0.2
-        df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
+        # 战法C: 强庄首阴
+        sC_gene = df['Max_Pct_10d'] > 7.0
+        sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -7.0)
+        sC_vol = df['成交量'] < df['Vol_MA5'] * 0.8
+        df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol
 
+        # 战法D: 均线粘合
         ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
         ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
         sD_squeeze = (ma_max - ma_min) / ma_min < 0.03 
-        sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 3.0)
-        df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up & global_shield
+        sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 2.0)
+        df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up
         
-        sE_gene = df['Pct_Chg_Shift1'] > 9.0
-        sE_pct = (df['涨跌幅'] > -5.0) & (df['涨跌幅'] < 4.0)
-        sE_vol = df['成交量'] > df['Vol_MA5'] * 1.5
-        sE_cpv = df['CPV'] > 0.4 
-        df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol & sE_cpv & global_shield
+        # 战法E: 龙头断板分歧
+        sE_gene = df['Pct_Chg_Shift1'] > 8.0
+        sE_pct = (df['涨跌幅'] > -6.0) & (df['涨跌幅'] < 4.0)
+        sE_vol = df['成交量'] > df['Vol_MA5'] * 1.2
+        df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol
         
-        sF_day3 = df['Pct_Chg_Shift3'] > 6.0
-        sF_day21 = (df['Pct_Chg_Shift2'] < 2.0) & (df['Pct_Chg_Shift1'] < 2.0) & (df['收盘'].shift(1) > df['Open_Shift3'])
+        # 战法F: N字反包
+        sF_day3 = df['Pct_Chg_Shift3'] > 5.0
+        sF_day21 = (df['Pct_Chg_Shift2'] < 3.0) & (df['Pct_Chg_Shift1'] < 3.0) & (df['收盘'].shift(1) > df['Open_Shift3'])
         sF_today = df['涨跌幅'] > 0
         sF_vol = df['成交量'] < df['Vol_Shift3']
-        df['Sig_F_N_Shape'] = sF_day3 & sF_day21 & sF_today & sF_vol & global_shield
+        df['Sig_F_N_Shape'] = sF_day3 & sF_day21 & sF_today & sF_vol
         
+        # 战法G: 新高突破
         sG_high = df['收盘'] >= df['High_120d_shift']
-        sG_vol = df['成交量'] > df['Vol_MA5'] * 2.0
-        sG_pct = df['涨跌幅'] > 4.0
-        sG_cpv = df['CPV'] > 0.7 
-        df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield
+        sG_vol = df['成交量'] > df['Vol_MA5'] * 1.5
+        sG_pct = df['涨跌幅'] > 3.0
+        df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct
         
-        sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
+        # 战法H: 缩量双底
+        sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.06
         sH_macd = df['MACD'] > df['MACD'].shift(5)
-        sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        sH_vol = df['成交量'] < df['Vol_MA5'] * 0.8
         df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol
 
         return df
@@ -432,7 +420,7 @@ class ReboundScreener:
         past_lessons = self.load_ai_lessons()
         cand_text = ""
         for c in candidates:
-            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | K线重心:{c['重心CPV']}\n"
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | 量比:{c['量比']}\n"
 
         worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
         best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
@@ -763,7 +751,7 @@ class ReboundScreener:
             if consecutive_errors >= 10:
                 logger.warning("🚨 连续10次获取K线失败！触发休眠退让机制，暂停 10 秒...")
                 time.sleep(10)
-                consecutive_errors = 0 # 放下屠刀，不再直接 break 中断全盘！
+                consecutive_errors = 0 
                 
             if i % 20 == 0: logger.info(f"⏳ 真实执行(EV)矩阵推演中... 进度: {i} / {total_c}")
                 
@@ -839,14 +827,16 @@ class ReboundScreener:
                 
                 today_signals[code] = {
                     'name': name, 'price': last['收盘'], 'pct': row['pct_chg'], 'amount': row['amount'], 
-                    'v_ratio': v_ratio, 'cpv': last['CPV'],
+                    'v_ratio': v_ratio,
                     'sig_A': last['Sig_A_Trend_Pullback'], 'sig_B': last['Sig_B_Bottom_Breakout'],
                     'sig_C': last['Sig_C_Strong_Dip'], 'sig_D': last['Sig_D_MA_Squeeze'],
                     'sig_E': last['Sig_E_Dragon_Relay'], 'sig_F': last['Sig_F_N_Shape'],
                     'sig_G': last['Sig_G_ATH_Breakout'], 'sig_H': last['Sig_H_Double_Bottom']
                 }
                 time.sleep(random.uniform(0.05, 0.1))
-            except Exception: continue
+            except Exception as e:
+                logger.error(f"🚨 推演股票 {code} 时发生内部异常: {e}")
+                continue
 
         # =========================================================
         # 🏆 核心：实盘表现倒逼理论评分 (消灭假数据)
@@ -858,7 +848,6 @@ class ReboundScreener:
             
             stats['real_win_rate'] = -1.0
             
-            # 🚀 提出来的全局兼容实盘匹配逻辑
             s_key_short = s_name.split(':')[0].strip() 
             s_core_name = s_name.split(':')[1].strip() if ':' in s_name else s_name 
             
@@ -949,7 +938,7 @@ class ReboundScreener:
                     final_pool.append({
                         "代码": code, "名称": info['name'], "现价": info['price'],
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
-                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "重心CPV": f"{info['cpv']:.2f}", "sort_score": info['amount'] 
+                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "sort_score": info['amount'] 
                     })
         else:
             for st in ranked_strategies:
@@ -964,7 +953,7 @@ class ReboundScreener:
                         temp_pool.append({
                             "代码": code, "名称": info['name'], "现价": info['price'],
                             "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
-                            "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "重心CPV": f"{info['cpv']:.2f}",
+                            "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿",
                             "sort_score": info['amount'] 
                         })
                 
