@@ -277,9 +277,17 @@ class ReboundScreener:
                     for date in recent_dates:
                         day_df = recent_records[recent_records['Date_T0'] == date]
                         for _, r in day_df.iterrows():
+                            # 修复：计算并补充缺失的“当前价”字段
+                            t0_p = float(r['Price_T0'])
+                            ret_val = float(r['Realized_Ret'])
+                            curr_p = r.get('Price_T1')
+                            # 如果还没正式平仓（没有固定价格），根据盈亏自动推算当前浮动价
+                            if pd.isna(curr_p) or str(curr_p).strip() == '':
+                                curr_p = t0_p * (1 + ret_val / 100)
+                                
                             review_records.append({
                                 "推演日": r['Date_T0'], "代码": str(r['Code']).zfill(6), "名称": r['Name'], 
-                                "买入价": r['Price_T0'], "真实涨跌幅": f"{r['Realized_Ret']:+.2f}%", 
+                                "买入价": round(t0_p, 2), "当前价": round(float(curr_p), 2), "真实涨跌幅": f"{ret_val:+.2f}%", 
                                 "当时逻辑": str(r.get('AI_Reason', ''))[:60]
                             })
                             
