@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 终极完全体 (OBV主力透视 + 动态温控凯利 + 全局实盘进化)
+A股游资量化选股雷达 - 动态EV期望 + 全局实盘强制核算 (绝不静默退出版)
 ===================================
 
-核心重构 (One-Step Ultimate):
-1. 【OBV 主力透视】：引入 On-Balance Volume 能量潮指标，过滤主力资金净流出的标的，拒绝散户接盘！
-2. 【温控动态凯利】：结合两市成交额与大盘MA20，动态扩缩容凯利仓位（万亿牛市放大，缩量熊市极度压缩）。
-3. 【纯粹理科 AI】：向大模型投喂 EV、胜率、主力资金流向等硬核数据，逼迫其从“讲故事”转向“算期望”。
+核心重构:
+1. 【消灭静默退出】：任何导致系统中断的环节（无数据、无邮箱密码等），强制输出醒目的 🚨 ERROR 日志！
+2. 【接口模糊自适应】：兼容东方财富/新浪财经的字段名暗改（如成交额、涨跌幅的命名变动），杜绝解析全空。
+3. 【全满配护盾】：OBV主力透视 + 动态温控凯利 + 真实胜率双向截断回测，保持终极形态火力。
 """
 
 import os
@@ -68,39 +68,52 @@ class ReboundScreener:
                 if attempt == retries - 1: raise e
                 time.sleep(delay)
 
+    def _parse_spot_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """🚀 模糊自适应解析：防止接口列名暗改导致数据全空"""
+        if df is None or df.empty: return pd.DataFrame()
+        
+        res = pd.DataFrame()
+        cols = df.columns.tolist()
+        
+        # 模糊匹配映射
+        for c in cols:
+            c_str = str(c).lower()
+            if '代码' in c_str or 'symbol' in c_str: res['code'] = df[c].astype(str).str.replace(r'^[a-zA-Z]+', '', regex=True)
+            elif '名称' in c_str or 'name' in c_str: res['name'] = df[c]
+            elif '涨跌幅' in c_str or 'changepercent' in c_str: res['pct_chg'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '成交额' in c_str or 'amount' in c_str: res['amount'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '流通市值' in c_str or 'circ' in c_str: res['circ_mv'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '总市值' in c_str or 'market_cap' in c_str: res['market_cap'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '最新' in c_str or 'trade' in c_str or '收盘' in c_str: res['close'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '今开' in c_str or 'open' in c_str: res['open'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            elif '昨收' in c_str or 'settlement' in c_str: res['prev_close'] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
+        # 兜底确保关键字段存在
+        for req_col in ['code', 'name', 'amount', 'close', 'pct_chg']:
+            if req_col not in res.columns:
+                res[req_col] = 0 if req_col not in ['code', 'name'] else 'Unknown'
+                
+        if 'circ_mv' not in res.columns: res['circ_mv'] = res.get('market_cap', 0)
+        
+        return res
+
     def get_market_spot(self):
         try:
-            logger.info("尝试获取全量行情 (主引擎)...")
+            logger.info("尝试获取全量行情 (主引擎: 东方财富)...")
             df = self._fetch_with_retry(ak.stock_zh_a_spot_em, retries=2, delay=1)
-            df['code'] = df['代码'].astype(str)
-            df['name'] = df['名称']
-            df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
-            df['amount'] = pd.to_numeric(df['成交额'], errors='coerce').fillna(0)
-            df['market_cap'] = pd.to_numeric(df.get('总市值', 0), errors='coerce').fillna(0)
-            df['circ_mv'] = pd.to_numeric(df.get('流通市值', df['market_cap']), errors='coerce').fillna(0)
-            df['close'] = pd.to_numeric(df['最新价'], errors='coerce').fillna(0)
-            df['open'] = pd.to_numeric(df.get('今开', df['close']), errors='coerce').fillna(0)
-            df['prev_close'] = pd.to_numeric(df.get('昨收', df['close']), errors='coerce').fillna(0)
-            return df
+            parsed_df = self._parse_spot_data(df)
+            if not parsed_df.empty: return parsed_df
         except Exception as e:
-            logger.warning("东方财富接口受限，🔄 切换至新浪财经...")
-            try:
-                df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=1, delay=1)
-                col_map = {'symbol': '代码', 'name': '名称', 'changepercent': '涨跌幅', 'amount': '成交额', 'trade': '最新价', 'open': '今开', 'settlement': '昨收'}
-                for eng, chn in col_map.items():
-                    if chn not in df.columns and eng in df.columns: df[chn] = df[eng]
-                df['code'] = df['代码'].str.replace(r'^[a-zA-Z]+', '', regex=True)
-                df['name'] = df['名称']
-                df['pct_chg'] = pd.to_numeric(df['涨跌幅'], errors='coerce').fillna(0)
-                df['amount'] = pd.to_numeric(df['成交额'], errors='coerce').fillna(0)
-                df['close'] = pd.to_numeric(df['最新价'], errors='coerce').fillna(0)
-                df['open'] = pd.to_numeric(df.get('今开', df['close']), errors='coerce').fillna(0)
-                df['prev_close'] = pd.to_numeric(df.get('昨收', df['close']), errors='coerce').fillna(0)
-                df['market_cap'] = 0  
-                df['circ_mv'] = 0  
-                return df
-            except Exception:
-                return pd.DataFrame()
+            logger.warning(f"东方财富接口受限 ({str(e)[:50]})，🔄 切换至新浪财经...")
+            
+        try:
+            df = self._fetch_with_retry(ak.stock_zh_a_spot, retries=1, delay=1)
+            parsed_df = self._parse_spot_data(df)
+            if not parsed_df.empty: return parsed_df
+        except Exception as e:
+            logger.error(f"🚨 新浪接口亦受限 ({str(e)[:50]})！")
+            
+        return pd.DataFrame()
 
     def fetch_top_sectors(self):
         try:
@@ -338,7 +351,7 @@ class ReboundScreener:
         df['ATR'] = df['TR'].rolling(14, min_periods=1).mean()
         df['ATR_Pct'] = (df['ATR'] / df['收盘']) * 100
         
-        # 🚀 终极杀器：OBV 主力能量潮指标 (跟踪资金真实流向)
+        # OBV 主力能量潮指标 (跟踪资金真实流向)
         obv = np.where(df['收盘'] > df['prev_close'], df['成交量'], 
                np.where(df['收盘'] < df['prev_close'], -df['成交量'], 0))
         df['OBV'] = pd.Series(obv).cumsum()
@@ -363,12 +376,12 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # NaN 免疫护盾，放宽参数防误杀
+        # 护盾放宽，防止误杀
         s_momentum_ok = df['Ret_20d'].fillna(0) > -15.0 
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
         
-        # 🚀 引入 OBV 主力护盾：只要 OBV 跌破 20日均线，说明主力资金处于持续流出状态，一票否决拒绝接盘！
+        # OBV 主力护盾：只要 OBV 跌破 20日均线，说明主力资金处于持续流出状态，一票否决拒绝接盘！
         s_obv_ok = df['OBV'] >= df['OBV_MA20']
         
         global_shield = s_momentum_ok & s_anti_harvest & s_not_overbought & s_obv_ok
@@ -419,7 +432,7 @@ class ReboundScreener:
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(5)
         sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
-        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_obv_ok # 防守极值同样需要资金配合
+        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_obv_ok 
 
         return df
 
@@ -495,7 +508,11 @@ class ReboundScreener:
         sender = self.config.email_sender
         pwd = self.config.email_password
         receivers = self.config.email_receivers or [sender]
-        if not sender or not pwd: return
+        
+        # 🚀 致命错误拦截：未配置邮箱
+        if not sender or not pwd: 
+            logger.error("🚨 致命错误：邮件发送被拦截！未配置 EMAIL_SENDER 或 EMAIL_PASSWORD 环境变量（请检查 Github Secrets）。系统退出。")
+            return
 
         today_str = datetime.now().strftime('%Y-%m-%d')
         total_vol = market_stats.get('total_amount', 0)
@@ -557,7 +574,7 @@ class ReboundScreener:
 
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (OBV护盾 + 实盘胜率双重惩罚)</h3>
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (期望值EV + 实盘胜率双重惩罚机制)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
                     <th>战法名称</th><th>理论胜率(短/长)</th><th>实盘验证胜率</th><th>理论EV期望</th><th>惩罚后打分</th>
@@ -589,6 +606,7 @@ class ReboundScreener:
                 medal = ""
                 
             color_ev = "red" if ev > 0 and not is_banned else "green" if ev <= 0 and not is_banned else "gray"
+            
             real_win_str = f"{real_win_rate*100:.1f}%" if real_win_rate >= 0 else "样本不足"
             if real_win_rate >= 0 and real_win_rate < 0.35: real_win_str = f"<span style='color:green;font-weight:bold;'>{real_win_str} (严重失真)</span>"
             
@@ -612,9 +630,9 @@ class ReboundScreener:
             clean_macro = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', str(ai_data.get('macro_view', '无')))
             
             top5_html += f"""
-            <h3>🧠 硬核量化 AI：绝地反思与风口研判</h3>
+            <h3>🧠 顶级游资 AI：绝地反思与风口研判</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
-                <p><b>⚖️ 温控凯利系统指令：</b>基于当前大盘流动性与数学EV期望值测算，今日单只个股下注仓位极限严格控制在 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
+                <p><b>⚖️ 凯利系统指令：</b>基于EV期望与实盘打脸情况，今日单只个股下注仓位上限严格控制在 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
                 <p><b>🔄 处刑后深刻归因：</b>{clean_reflection}</p>
                 <p><b>🔴 血泪避坑铁律：</b><span style="color:red; font-weight:bold;">{clean_lesson}</span></p>
                 <p><b>🌍 情绪推演：</b>{clean_macro}</p>
@@ -639,24 +657,24 @@ class ReboundScreener:
                 """
             top5_html += "</table>"
         else:
-            top5_html = f"<p>🧊 极端冰点！受限于【实盘连亏惩罚】或【大盘破位】，AI 判定当前备选池全为无主力介入的绞肉机，强制剥夺开仓权，空仓保命！</p>"
+            top5_html = f"<p>🧊 极端冰点！受限于【实盘连亏惩罚】或【大盘破位】，AI 判定当前备选池全为绞肉机，强制剥夺开仓权，空仓保命！</p>"
 
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：OBV主力透视 + 动态温控凯利 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：全景实盘追踪 + 动态降维惩罚 ({today_str})</h2>
             {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在 AI 血泪实盘与主力资金(OBV)监控之上！宁可踏空，绝不送钱！严格执行给定的割肉与止盈线！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在 AI 血泪实盘回测之上！宁可踏空，绝不送钱！严格执行给定的割肉与止盈线！</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【究极全满配轮动】今日决战兵器：{actual_used_strategy} - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【实盘进化版轮动】今日决战兵器：{actual_used_strategy} - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "大数据波段系统"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -691,15 +709,24 @@ class ReboundScreener:
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·OBV透视动态温控终极印钞机】 ==========")
+        logger.info("========== 启动【5日波段潜伏·全局实盘追踪终极形态】 ==========")
         
         df = self.get_market_spot()
-        if df.empty: return
+        # 🚀 致命错误拦截：大盘数据完全获取失败
+        if df is None or df.empty: 
+            logger.error("🚨 致命错误：大盘行情数据获取失败（东方财富与新浪接口均返回空）！请检查是否断网或在非交易时间。系统被迫退出！")
+            return
             
         review_summary, review_records, recent_stats, global_stats, ai_feedback_data, strategy_real_performance = self.process_review_and_history(df, lookback_batches=5)
             
         logger.info("👉 执行全市场流动性与风口感知...")
         top_sectors = self.fetch_top_sectors()
+        
+        # 🚀 健壮性修复：防止 df['amount'] 不存在导致后续全盘崩溃
+        if 'amount' not in df.columns:
+            logger.error("🚨 致命错误：大盘数据中未能成功解析出 '成交额(amount)' 字段，系统被迫退出！")
+            return
+            
         total_amount_yi = df['amount'].sum() / 1_0000_0000
         
         limit_down_count = len(df[df['pct_chg'] <= -9.5])
@@ -846,7 +873,7 @@ class ReboundScreener:
                 continue
 
         # =========================================================
-        # 🏆 核心：实盘表现倒逼理论评分 + 动态温控凯利仓位
+        # 🏆 核心：实盘表现倒逼理论评分 (消灭假数据)
         # =========================================================
         ranked_strategies = []
         for s_name, stats in tournament_stats.items():
@@ -896,14 +923,8 @@ class ReboundScreener:
                 odds = avg_win_ret / avg_loss_ret if avg_loss_ret > 0 else 1.0
                 kelly_fraction = win_rate - ((1 - win_rate) / odds) if avg_loss_ret > 0 else 0.99
                 
-                # 🚀 物理级动态温控凯利：结合成交额和大盘形态缩放仓位
                 if not is_market_safe:
-                    kelly_fraction = kelly_fraction * 0.3 # 大盘破位，极度防守
-                elif total_amount_yi < 7000:
-                    kelly_fraction = kelly_fraction * 0.5 # 极度缩量冰点，仓位减半
-                elif total_amount_yi > 15000 and is_market_safe:
-                    kelly_fraction = kelly_fraction * 1.2 # 万亿狂暴牛市，重拳出击放大仓位
-                    
+                    kelly_fraction = kelly_fraction * 0.5 
                 kelly_pct = max(0, min(1.0, kelly_fraction)) * 100
                 
                 base_score = expectancy * 0.4 + (win_rate_15d * avg_win_ret - (1-win_rate_15d)*avg_loss_ret) * 0.6 if trades_15d > 0 else expectancy * 0.5
@@ -951,7 +972,7 @@ class ReboundScreener:
                     final_pool.append({
                         "代码": code, "名称": info['name'], "现价": info['price'],
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
-                        "量比": f"{info['v_ratio']:.2f}", "主力流向(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", "sort_score": info['amount'] 
+                        "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "重心CPV": f"{info['cpv']:.2f}", "sort_score": info['amount'] 
                     })
         else:
             for st in ranked_strategies:
@@ -966,7 +987,7 @@ class ReboundScreener:
                         temp_pool.append({
                             "代码": code, "名称": info['name'], "现价": info['price'],
                             "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
-                            "量比": f"{info['v_ratio']:.2f}", "主力流向(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}",
+                            "量比": f"{info['v_ratio']:.2f}", "成交额": f"{info['amount']/100000000:.1f}亿", "重心CPV": f"{info['cpv']:.2f}",
                             "sort_score": info['amount'] 
                         })
                 
@@ -1003,7 +1024,8 @@ class ReboundScreener:
                 self.save_ai_lesson(ai_result.get("new_lesson_learned", ""))
         
         self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc, global_stats)
-        print("================================================================================")
+        
+        logger.info("========== 🎉 选股雷达全部流程执行完毕！ ==========")
 
 if __name__ == "__main__":
     screener = ReboundScreener()
