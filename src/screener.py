@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 逻辑自洽修复 + 底层索引锁死 (涅槃满血版)
+A股游资量化选股雷达 - 逻辑自洽修复 + 指标满血重构版
 ===================================
 
 核心重构:
-1. 【解开逻辑悖论】：取消全局的 OBV 资金限制。仅要求突破战法具备强资金流入，允许低吸战法存在洗盘时的正常资金回落，释放被绞杀的策略样本！
-2. 【底层索引洗牌】：对所有 K线数据强制 reset_index()，杜绝 akshare 返回非标索引导致的 ATR/OBV 计算全盘 NaN 崩溃。
-3. 【极寒冰点降频】：在 4000+ 下跌的极端行情中，EV 期望为负的策略将被严格拦截。
+1. 【核心指标重构】：修复了由于缺少 Max_Pct_10d、MACD、High_120d 等指标导致的底层连环 KeyError 崩溃问题。
+2. 【解开逻辑悖论】：取消全局的 OBV 资金限制。仅要求突破战法具备强资金流入，允许低吸战法存在洗盘时的正常资金回落。
+3. 【底层索引洗牌】：对所有 K线数据强制 reset_index()，杜绝 akshare 返回非标索引导致的 NaN 崩溃。
 """
 
 import os
@@ -129,7 +129,7 @@ class ReboundScreener:
         try:
             df = self._fetch_with_retry(ak.stock_zh_a_hist, retries=1, delay=0.5, symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
             if df is not None and not df.empty and '日期' in df.columns: 
-                return df.reset_index(drop=True) # 🚀 核心修复：强制清洗索引
+                return df.reset_index(drop=True) # 🚀 强制清洗索引
         except: pass
 
         if self.pro:
@@ -315,13 +315,14 @@ class ReboundScreener:
     def calculate_technical_indicators(self, hist):
         df = hist.copy()
         
-        # 🚀 由于之前已经在 _get_daily_kline 中做了 reset_index，这里的操作就安全得多
+        # 确保基础列为数值类型
         for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
             df[c] = pd.to_numeric(df[c], errors='coerce')
             
         if '涨跌幅' not in df.columns:
             df['涨跌幅'] = df['收盘'].pct_change() * 100
             
+        # 基础均线
         df['MA5'] = df['收盘'].rolling(5).mean()
         df['MA10'] = df['收盘'].rolling(10).mean()
         df['MA20'] = df['收盘'].rolling(20).mean()
@@ -329,11 +330,12 @@ class ReboundScreener:
         df['MA60'] = df['收盘'].rolling(60).mean()
         df['Vol_MA5'] = df['成交量'].rolling(5).mean()
         
+        # 动量与布林带
         df['Ret_20d'] = df['收盘'].pct_change(20) * 100
-        
         df['Std_20'] = df['收盘'].rolling(20).std()
         df['BB_Up'] = df['MA20'] + 2 * df['Std_20']
         
+        # ATR 真实波动率
         df['prev_close'] = df['收盘'].shift(1).fillna(df['收盘'])
         tr1 = df['最高'] - df['最低']
         tr2 = (df['最高'] - df['prev_close']).abs()
@@ -342,18 +344,38 @@ class ReboundScreener:
         df['ATR'] = df['TR'].rolling(14, min_periods=1).mean()
         df['ATR_Pct'] = (df['ATR'] / df['收盘']) * 100
         
-        # 🚀 安全的 OBV 主力能量潮指标计算
+        # ==========================================
+        # 🚀 极其关键的护盾修复：补齐被遗漏的计算字段
+        # ==========================================
+        # 战法C 需要的 10日最大涨幅
+        df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
+        
+        # 战法G 需要的 120日最高价
+        df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
+        
+        # 战法H 需要的 20日最低价 和 MACD
+        df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        macd_dif = exp1 - exp2
+        macd_dea = macd_dif.ewm(span=9, adjust=False).mean()
+        df['MACD'] = 2 * (macd_dif - macd_dea)
+        # ==========================================
+
+        # 安全的 OBV 主力能量潮指标计算
         obv = np.where(df['收盘'] > df['prev_close'], df['成交量'], 
                np.where(df['收盘'] < df['prev_close'], -df['成交量'], 0))
-        df['OBV'] = np.cumsum(obv) # 强力锁死索引，防止产生 NaN
+        df['OBV'] = np.cumsum(obv)
         df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
         
+        # K线重心与防收割指标
         df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
         df['Avg_Body_5d'] = df['Body'].rolling(5, min_periods=1).mean().fillna(0.001) + 0.001
         df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5, min_periods=1).mean().fillna(0)
 
+        # 5日后目标价用于回测
         df['Close_T5'] = df['收盘'].shift(-5)
         df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
         df['Low_5D'] = df['最低'].shift(-1)[::-1].rolling(5, min_periods=1).min()[::-1]
@@ -367,14 +389,14 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # 🚀 降维护盾：移除过分苛刻的条件
+        # 降维护盾：移除过分苛刻的条件
         s_momentum_ok = df['Ret_20d'].fillna(0) > -15.0 
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
         
         global_shield = s_momentum_ok & s_anti_harvest & s_not_overbought
         
-        # 🚀 拆除悖论：OBV 资金流入（强主力）只对“向上突破类战法”生效
+        # 拆除悖论：OBV 资金流入（强主力）只对“向上突破类战法”生效
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
         # 战法A: 趋势低吸 (允许资金随洗盘微调，不强制要求 OBV > MA20)
@@ -863,7 +885,7 @@ class ReboundScreener:
                 }
                 time.sleep(random.uniform(0.05, 0.1))
             except Exception as e:
-                logger.error(f"🚨 推演股票 {code} 时异常: {e}")
+                logger.error(f"🚨 推演股票 {code} 时发生内部异常，跳过此股: {e}")
                 continue
 
         # =========================================================
@@ -1024,6 +1046,71 @@ class ReboundScreener:
         
         self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc, global_stats)
         logger.info("========== 🎉 系统完美执行完毕！ ==========")
+
+    def calculate_technical_indicators(self, hist):
+        df = hist.copy()
+        
+        for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+            
+        if '涨跌幅' not in df.columns:
+            df['涨跌幅'] = df['收盘'].pct_change() * 100
+            
+        df['MA5'] = df['收盘'].rolling(5).mean()
+        df['MA10'] = df['收盘'].rolling(10).mean()
+        df['MA20'] = df['收盘'].rolling(20).mean()
+        df['MA30'] = df['收盘'].rolling(30).mean()
+        df['MA60'] = df['收盘'].rolling(60).mean()
+        df['Vol_MA5'] = df['成交量'].rolling(5).mean()
+        
+        df['Ret_20d'] = df['收盘'].pct_change(20) * 100
+        
+        df['Std_20'] = df['收盘'].rolling(20).std()
+        df['BB_Up'] = df['MA20'] + 2 * df['Std_20']
+        
+        df['prev_close'] = df['收盘'].shift(1).fillna(df['收盘'])
+        tr1 = df['最高'] - df['最低']
+        tr2 = (df['最高'] - df['prev_close']).abs()
+        tr3 = (df['最低'] - df['prev_close']).abs()
+        df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        df['ATR'] = df['TR'].rolling(14, min_periods=1).mean()
+        df['ATR_Pct'] = (df['ATR'] / df['收盘']) * 100
+        
+        # 🚀 补齐丢失的核心指标，修复导致回测全0的元凶
+        df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
+        df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
+        df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
+        
+        # MACD 计算
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        macd_dif = exp1 - exp2
+        macd_dea = macd_dif.ewm(span=9, adjust=False).mean()
+        df['MACD'] = 2 * (macd_dif - macd_dea)
+        
+        # OBV 主力能量潮指标
+        obv = np.where(df['收盘'] > df['prev_close'], df['成交量'], 
+               np.where(df['收盘'] < df['prev_close'], -df['成交量'], 0))
+        df['OBV'] = np.cumsum(obv)
+        df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
+        
+        df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
+        df['Body'] = abs(df['收盘'] - df['开盘'])
+        df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
+        df['Avg_Body_5d'] = df['Body'].rolling(5, min_periods=1).mean().fillna(0.001) + 0.001
+        df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5, min_periods=1).mean().fillna(0)
+
+        df['Close_T5'] = df['收盘'].shift(-5)
+        df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
+        df['Low_5D'] = df['最低'].shift(-1)[::-1].rolling(5, min_periods=1).min()[::-1]
+        
+        df['Pct_Chg_Shift1'] = df['涨跌幅'].shift(1)
+        df['Pct_Chg_Shift2'] = df['涨跌幅'].shift(2)
+        df['Pct_Chg_Shift3'] = df['涨跌幅'].shift(3)
+        df['Vol_Shift3'] = df['成交量'].shift(3)
+        df['Open_Shift3'] = df['开盘'].shift(3)
+        
+        return df
 
 if __name__ == "__main__":
     screener = ReboundScreener()
