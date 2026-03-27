@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 相对强度(RPS) + 均线斜率测向 (阿尔法究极版)
+A股游资量化选股雷达 - 顶级Alpha复合打分 + 环境自适应镇压 (满血殿堂版)
 ===================================
 
 核心重构:
-1. 【RPS 相对强度护盾】：引入个股跑赢大盘指数的 RPS 指标，严禁买入跑输大盘 5% 以上的弱势股。
-2. 【MA20 斜率测向】：计算生命线斜率，严禁接飞刀（MA20陡峭向下的标的直接一票否决）。
-3. 【断头台级实盘熔断】：回测周期缩短至 120 天贴近近期行情，实盘胜率容忍线从 35% 提高至 40%，低于 40% 永久剥夺开仓权！
+1. 【多因子 Alpha 打分】：抛弃仅靠成交额排序的粗糙逻辑，综合 RPS、CPV、OBV 和 MACD，计算出最具爆发潜力的 Alpha Score，择优出击！
+2. 【大盘环境自适应镇压】：当大盘跌破 MA20 时，强行将所有“激进突破类”战法的最终得分削减 80%，强制系统进入左侧防守模式！
+3. 【CCI 通道极限过滤】：引入 CCI 指标过滤绝对高位的极端泡沫，精准狙击错杀深坑。
 """
 
 import os
@@ -117,7 +117,6 @@ class ReboundScreener:
                 sh_close = sh_index['close'].iloc[-1]
                 sh_ma20 = sh_index['close'].tail(20).mean()
                 
-                # 🚀 新增：计算大盘基准收益率，用于计算个股的相对强度 RPS
                 sh_ret_20d = (sh_close - sh_index['close'].iloc[-21]) / sh_index['close'].iloc[-21] * 100
                 
                 if sh_close < sh_ma20:
@@ -335,10 +334,10 @@ class ReboundScreener:
         
         df['Ret_20d'] = df['收盘'].pct_change(20) * 100
         
-        # 🚀 引入核心部件1: RPS 相对强度 (跑赢大盘的幅度)
+        # 🚀 RPS 相对大盘强度
         df['RPS_20d'] = df['Ret_20d'] - sh_ret_20d
         
-        # 🚀 引入核心部件2: MA20 生命线仰角探测仪 (防飞刀)
+        # 🚀 MA20 生命周期斜率
         df['MA20_Slope'] = (df['MA20'] - df['MA20'].shift(3)) / df['MA20'].shift(3) * 100
         
         df['Std_20'] = df['收盘'].rolling(20).std()
@@ -367,6 +366,12 @@ class ReboundScreener:
         df['OBV'] = np.cumsum(obv)
         df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
         
+        # 🚀 极致补充：CCI 顺势通道指标 (捕捉极端超买和超卖)
+        df['TP'] = (df['最高'] + df['最低'] + df['收盘']) / 3
+        df['MA_TP'] = df['TP'].rolling(20, min_periods=1).mean()
+        df['MD'] = (df['TP'] - df['MA_TP']).abs().rolling(20, min_periods=1).mean().fillna(0.001)
+        df['CCI'] = (df['TP'] - df['MA_TP']) / (0.015 * df['MD'] + 0.0001)
+
         df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
@@ -386,25 +391,25 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # 🚀 降维护盾升级：融入 RPS 和 斜率防飞刀
-        s_rps_ok = df['RPS_20d'].fillna(0) > -8.0  # 严禁买入严重跑输大盘的垃圾股
-        s_ma20_up = df['MA20_Slope'].fillna(0) > -1.5 # 严禁接飞刀：生命线不得出现陡峭向下的抛售趋势
+        s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  
+        s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 
         
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
         
-        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought
+        # 🚀 CCI 极值防卫：拒绝去买短线已经涨上天的极度超买股
+        s_cci_safe = df['CCI'] < 200 
+        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe
         
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
-        # 战法A: 趋势低吸
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
         sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
         sA_cpv = df['CPV'] > 0.2 
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
-        # 战法B: 底部起爆
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
         sB_break = df['收盘'] > df['MA60']
         sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
@@ -412,46 +417,40 @@ class ReboundScreener:
         sB_cpv = df['CPV'] > 0.6 
         df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & global_shield & s_obv_strong
 
-        # 战法C: 强庄首阴
         sC_gene = df['Max_Pct_10d'] > 8.0
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
         sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
         sC_cpv = df['CPV'] > 0.2
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
 
-        # 战法D: 均线粘合
         ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
         ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
         sD_squeeze = (ma_max - ma_min) / ma_min < 0.03 
         sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 3.0)
         df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up & global_shield
         
-        # 战法E: 龙头断板分歧
         sE_gene = df['Pct_Chg_Shift1'] > 9.0
         sE_pct = (df['涨跌幅'] > -5.0) & (df['涨跌幅'] < 4.0)
         sE_vol = df['成交量'] > df['Vol_MA5'] * 1.5
         sE_cpv = df['CPV'] > 0.4 
         df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol & sE_cpv & global_shield
         
-        # 战法F: N字反包
         sF_day3 = df['Pct_Chg_Shift3'] > 6.0
         sF_day21 = (df['Pct_Chg_Shift2'] < 2.0) & (df['Pct_Chg_Shift1'] < 2.0) & (df['收盘'].shift(1) > df['Open_Shift3'])
         sF_today = df['涨跌幅'] > 0
         sF_vol = df['成交量'] < df['Vol_Shift3']
         df['Sig_F_N_Shape'] = sF_day3 & sF_day21 & sF_today & sF_vol & global_shield
         
-        # 战法G: 新高突破 
         sG_high = df['收盘'] >= df['High_120d_shift']
         sG_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sG_pct = df['涨跌幅'] > 4.0
         sG_cpv = df['CPV'] > 0.7 
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield & s_obv_strong
         
-        # 战法H: 缩量双底
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(5)
         sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
-        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok # 双底允许均线微朝下，但也必须有相对抗跌强度
+        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0) & s_cci_safe
 
         return df
 
@@ -462,8 +461,8 @@ class ReboundScreener:
         past_lessons = self.load_ai_lessons()
         cand_text = ""
         for c in candidates:
-            # 🚀 注入 RPS 和 MA20斜率 数据给 AI 进行理科评判
-            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 涨幅:{c['今日涨幅']} | 相对大盘强度(RPS): {c.get('rps', 0):+.2f}% | MA20斜率: {c.get('ma20_slope', 0):+.2f}% | 主力流向(OBV):{c.get('obv_status', '未知')}\n"
+            # 🚀 注入 Alpha 得分 和 CCI，让 AI 用纯粹的理科逻辑去解读爆发力
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | Alpha得分:{c.get('alpha_score', 0):.1f} | CCI:{c.get('cci', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | OBV:{c.get('obv_status', '未知')}\n"
 
         worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
         best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
@@ -484,7 +483,7 @@ class ReboundScreener:
 ### 🧠 历史避坑铁律：
 {past_lessons}
 
-### 📊 硬核备选池 (请仔细筛选，必须优先选择 RPS 为正且 MA20斜率向上的标的！)：
+### 📊 硬核备选池 (已按多因子Alpha爆发力从高到低排序，请优先选择得分最高的！)：
 {cand_text}
 
 ### 🎯 终极任务指令：
@@ -505,7 +504,7 @@ class ReboundScreener:
             "name": "名称",
             "strategy": "原样保留",
             "current_price": 现价,
-            "reason": "入选逻辑（必须强调 RPS相对强度、MA20斜率、主力资金OBV状态与风口契合度）",
+            "reason": "入选逻辑（必须强调 Alpha得分、RPS、CCI通道、主力资金OBV状态等硬核指标！）",
             "target_price": "波段目标价",
             "stop_loss": "破位止损价"
         }}
@@ -593,7 +592,7 @@ class ReboundScreener:
 
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (RPS护盾 + 40%实盘断头台机制)</h3>
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (环境自适应镇压 + 40%实盘断头台)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
                     <th>战法名称</th><th>理论胜率(短/长)</th><th>实盘验证胜率</th><th>理论EV期望</th><th>惩罚后打分</th>
@@ -649,7 +648,7 @@ class ReboundScreener:
             clean_macro = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', str(ai_data.get('macro_view', '无')))
             
             top5_html += f"""
-            <h3>🧠 硬核量化 AI：绝地反思与风口研判</h3>
+            <h3>🧠 硬核多因子 AI：绝地反思与 Alpha 研判</h3>
             <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
                 <p><b>⚖️ 温控凯利系统指令：</b>基于大盘流动性与数学EV期望测算，今日单只个股下注仓位极限控制在 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
                 <p><b>🔄 处刑后深刻归因：</b>{clean_reflection}</p>
@@ -657,10 +656,10 @@ class ReboundScreener:
                 <p><b>🌍 情绪推演：</b>{clean_macro}</p>
             </div>
             
-            <h3>🎯 终极筛选实战出击池 (共 {target_count} 只，严格执行【{actual_used_strategy}】)</h3>
+            <h3>🎯 终极 Alpha 出击池 (共 {target_count} 只，严格执行【{actual_used_strategy}】)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #2c3e50; color: #ffffff;">
-                    <th>代码</th><th>名称</th><th>策略标识</th><th>现价</th><th>波段防守计划</th><th>进化后的核心逻辑</th>
+                    <th>代码</th><th>名称</th><th>策略标识</th><th>现价</th><th>波段防守计划</th><th>Alpha多因子逻辑</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
@@ -681,19 +680,19 @@ class ReboundScreener:
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：全景双盲 EV 测算 + 动态温控凯利 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：多因子Alpha排序 + 大盘自适应镇压 ({today_str})</h2>
             {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在满血双向截断回测之上！加入了 RPS 跑赢大盘校验！严格执行给定的割肉与止盈线！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在满血双向截断回测之上！加入了 RPS 相对大盘强度校验和 CCI 通道防飞刀！严格执行给定的割肉与止盈线！</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【终极量化满血版】今日决战兵器：{actual_used_strategy} - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【多因子Alpha版】今日决战兵器：{actual_used_strategy} - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "大数据波段系统"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -728,7 +727,7 @@ class ReboundScreener:
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·大局观EV期望值满血印钞机】 ==========")
+        logger.info("========== 启动【5日波段潜伏·多因子Alpha+环境自适应印钞机】 ==========")
         
         df = self.get_market_spot()
         if df is None or df.empty: 
@@ -792,7 +791,6 @@ class ReboundScreener:
         
         today_signals = {} 
         total_c = len(candidates)
-        # 🚀【极度关键】：回测周期从 250 天直接腰斩到 120 天！(抹除去年的疯牛记忆，只看最近半年的震荡市表现)
         lookback_days = 120
         consecutive_errors = 0
         
@@ -875,10 +873,16 @@ class ReboundScreener:
                 v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
                 obv_status = "净流入(强)" if last['OBV'] > last['OBV_MA20'] else "净流出(弱)"
                 
+                # 🚀 极致核武：多因子 Alpha 打分系统 (取代简单的成交额排序)
+                alpha_score = (last['RPS_20d'] * 1.5) + (last['CPV'] * 20.0) + (10.0 if last['OBV'] > last['OBV_MA20'] else -10.0) + (last['MACD'] * 5.0)
+                if last['CCI'] < -100: alpha_score += 15.0 # 奖励被错杀的极端超卖股
+                if last['CCI'] > 100: alpha_score += 5.0 # 奖励强动量股
+                
                 today_signals[code] = {
                     'name': name, 'price': last['收盘'], 'pct': row['pct_chg'], 'amount': row['amount'], 
                     'v_ratio': v_ratio, 'cpv': last['CPV'], 'obv_status': obv_status,
-                    'rps': last['RPS_20d'], 'ma20_slope': last['MA20_Slope'],
+                    'rps': last['RPS_20d'], 'ma20_slope': last['MA20_Slope'], 'cci': last['CCI'],
+                    'alpha_score': alpha_score, # 保存 Alpha 打分用于排序
                     'sig_A': last['Sig_A_Trend_Pullback'], 'sig_B': last['Sig_B_Bottom_Breakout'],
                     'sig_C': last['Sig_C_Strong_Dip'], 'sig_D': last['Sig_D_MA_Squeeze'],
                     'sig_E': last['Sig_E_Dragon_Relay'], 'sig_F': last['Sig_F_N_Shape'],
@@ -890,7 +894,7 @@ class ReboundScreener:
                 continue
 
         # =========================================================
-        # 🏆 核心：实盘倒逼(提高熔断阈值) + EV期望值 + 动态温控
+        # 🏆 核心：大盘环境自适应镇压 + 实盘倒逼 + EV期望值
         # =========================================================
         ranked_strategies = []
         for s_name, stats in tournament_stats.items():
@@ -927,14 +931,13 @@ class ReboundScreener:
                 
                 real_win_rate_multiplier = 1.0 
                 
-                # 🚀 史无前例的“断头台”：实盘胜率如果低于40%，立刻处决，直接乘以真实胜率打残它！
                 if stats['real_win_rate'] >= 0:
                     if stats['real_win_rate'] < 0.40:
-                        real_win_rate_multiplier = max(0.1, stats['real_win_rate']) # 严厉降维惩罚
+                        real_win_rate_multiplier = max(0.1, stats['real_win_rate']) 
                         stats['is_banned'] = True
-                        logger.warning(f"🚫 实盘熔断: 【{s_name}】 真实胜率仅 {stats['real_win_rate']*100:.1f}% (低于40%安全线)，永久拉黑！")
+                        logger.warning(f"🚫 实盘熔断: 【{s_name}】 真实胜率仅 {stats['real_win_rate']*100:.1f}%，永久拉黑！")
                     elif stats['real_win_rate'] > 0.55:
-                        real_win_rate_multiplier = 1.2 # 高胜率翻倍奖励
+                        real_win_rate_multiplier = 1.2 
                     else:
                         real_win_rate_multiplier = max(0.5, stats['real_win_rate'] + 0.3)
                 
@@ -957,6 +960,11 @@ class ReboundScreener:
                 base_score = expectancy * 0.4 + (win_rate_15d * avg_win_ret - (1-win_rate_15d)*avg_loss_ret) * 0.6 if trades_15d > 0 else expectancy * 0.5
                 final_score = base_score * real_win_rate_multiplier
                 
+                # 🚀 大盘环境自适应镇压矩阵：如果大盘破位，强行暴扣所有【激进突破类】战法的得分！
+                if not is_market_safe and s_name in ['战法B: 底部起爆', '战法E: 龙头断板', '战法G: 新高突破']:
+                    final_score *= 0.2 
+                    logger.warning(f"📉 大盘破位镇压：剥夺激进战法【{s_name}】 80% 的出击权重！")
+
                 stats['win_rate'] = win_rate
                 stats['avg_ret'] = avg_ret
                 stats['win_rate_15d'] = win_rate_15d
@@ -999,7 +1007,8 @@ class ReboundScreener:
                     final_pool.append({
                         "代码": code, "名称": info['name'], "现价": info['price'],
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
-                        "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", "sort_score": info['amount'] 
+                        "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", 
+                        "alpha_score": info['alpha_score'] # 改用 Alpha Score
                     })
         else:
             for st in ranked_strategies:
@@ -1015,8 +1024,8 @@ class ReboundScreener:
                             "代码": code, "名称": info['name'], "现价": info['price'],
                             "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
                             "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}",
-                            "rps": info['rps'], "ma20_slope": info['ma20_slope'],
-                            "sort_score": info['amount'] 
+                            "rps": info['rps'], "ma20_slope": info['ma20_slope'], "cci": info['cci'],
+                            "alpha_score": info['alpha_score'] # 🚀 加入多因子 Alpha 评分进行角逐
                         })
                 
                 if temp_pool:
@@ -1035,7 +1044,8 @@ class ReboundScreener:
         logger.info(f"🎯 今日锁定实战出击策略: 【{actual_used_strategy}】 ({best_reason})")
 
         if final_pool:
-            final_pool = sorted(final_pool, key=lambda x: x['sort_score'], reverse=True)
+            # 🚀 降维杀器：将选出来的候选股按照 Alpha Score（爆发力得分）从高到低排序！绝不再按“盘子大不大”选股！
+            final_pool = sorted(final_pool, key=lambda x: x['alpha_score'], reverse=True)
             final_top_stocks = final_pool[:5]
         else:
             final_top_stocks = []
@@ -1072,10 +1082,8 @@ class ReboundScreener:
         
         df['Ret_20d'] = df['收盘'].pct_change(20) * 100
         
-        # 🚀 RPS 相对大盘强度 (跑赢大盘的幅度)
         df['RPS_20d'] = df['Ret_20d'] - sh_ret_20d
         
-        # 🚀 MA20 生命周期斜率 (防飞刀引擎)
         df['MA20_Slope'] = (df['MA20'] - df['MA20'].shift(3)) / df['MA20'].shift(3) * 100
         
         df['Std_20'] = df['收盘'].rolling(20).std()
@@ -1104,6 +1112,11 @@ class ReboundScreener:
         df['OBV'] = np.cumsum(obv)
         df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
         
+        df['TP'] = (df['最高'] + df['最低'] + df['收盘']) / 3
+        df['MA_TP'] = df['TP'].rolling(20, min_periods=1).mean()
+        df['MD'] = (df['TP'] - df['MA_TP']).abs().rolling(20, min_periods=1).mean().fillna(0.001)
+        df['CCI'] = (df['TP'] - df['MA_TP']) / (0.015 * df['MD'] + 0.0001)
+
         df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
         df['Body'] = abs(df['收盘'] - df['开盘'])
         df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
@@ -1123,14 +1136,15 @@ class ReboundScreener:
         return df
 
     def evaluate_strategies(self, df):
-        # 🚀 降维杀器：引入大盘相对强度 (RPS) 和 MA20 斜率
-        s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  # 严禁买入严重跑输大盘超过5%的垃圾股
-        s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 # 严禁接飞刀：MA20陡峭向下直接拉黑
+        s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  
+        s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 
         
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
         
-        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought
+        s_cci_safe = df['CCI'] < 200 
+        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe
         
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
@@ -1177,11 +1191,10 @@ class ReboundScreener:
         sG_cpv = df['CPV'] > 0.7 
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield & s_obv_strong
         
-        # 战法H: 缩量双底 (允许MA20短暂朝下，所以降低 MA20_Slope 的限制)
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(5)
         sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
-        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0)
+        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0) & s_cci_safe
 
         return df
 
