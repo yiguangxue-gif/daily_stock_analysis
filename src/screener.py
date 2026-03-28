@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 顶级Alpha复合打分 + 环境自适应镇压 (满血殿堂版)
+A股游资量化选股雷达 - AI 极限逻辑强化版 (ATR精准风控 + 致命隐患排查)
 ===================================
 
 核心重构:
-1. 【多因子 Alpha 打分】：抛弃仅靠成交额排序的粗糙逻辑，综合 RPS、CPV、OBV 和 MACD，计算出最具爆发潜力的 Alpha Score，择优出击！
-2. 【大盘环境自适应镇压】：当大盘跌破 MA20 时，强行将所有“激进突破类”战法的最终得分削减 80%，强制系统进入左侧防守模式！
-3. 【CCI 通道极限过滤】：引入 CCI 指标过滤绝对高位的极端泡沫，精准狙击错杀深坑。
+1. 【量化级风控计算】：向 AI 投喂底层 ATR (真实波动率) 数据，强制 AI 采用 1.5*ATR止损 / 2.5*ATR止盈 的数学模型设定点位。
+2. 【致命隐患排查机制】：强制 AI 引入空头思维 (Devil's Advocate)，必须写出每只推荐股票的当前最大隐患，杜绝盲目看多！
+3. 【多维逻辑拆解】：买入逻辑拆分为“量化Alpha因子特征”与“风口逻辑催化”，逻辑更严密、更专业。
 """
 
 import os
@@ -334,10 +334,8 @@ class ReboundScreener:
         
         df['Ret_20d'] = df['收盘'].pct_change(20) * 100
         
-        # 🚀 RPS 相对大盘强度
         df['RPS_20d'] = df['Ret_20d'] - sh_ret_20d
         
-        # 🚀 MA20 生命周期斜率
         df['MA20_Slope'] = (df['MA20'] - df['MA20'].shift(3)) / df['MA20'].shift(3) * 100
         
         df['Std_20'] = df['收盘'].rolling(20).std()
@@ -366,7 +364,6 @@ class ReboundScreener:
         df['OBV'] = np.cumsum(obv)
         df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
         
-        # 🚀 极致补充：CCI 顺势通道指标 (捕捉极端超买和超卖)
         df['TP'] = (df['最高'] + df['最低'] + df['收盘']) / 3
         df['MA_TP'] = df['TP'].rolling(20, min_periods=1).mean()
         df['MD'] = (df['TP'] - df['MA_TP']).abs().rolling(20, min_periods=1).mean().fillna(0.001)
@@ -390,23 +387,23 @@ class ReboundScreener:
         
         return df
 
-    def evaluate_strategies(self, df):
+    def evaluate_strategies(self, df, is_market_safe):
         s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  
         s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 
+        s_above_ma60 = df['收盘'] > df['MA60']
         
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
-        
-        # 🚀 CCI 极值防卫：拒绝去买短线已经涨上天的极度超买股
         s_cci_safe = df['CCI'] < 200 
         
-        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe
-        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe & s_above_ma60
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
+        vol_squeeze_ratio = 0.8 if is_market_safe else 0.6
+
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
-        sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
+        sA_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         sA_cpv = df['CPV'] > 0.2 
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
@@ -415,11 +412,11 @@ class ReboundScreener:
         sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sB_pct = df['涨跌幅'] > 4.0
         sB_cpv = df['CPV'] > 0.6 
-        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & global_shield & s_obv_strong
+        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & s_rps_ok & s_anti_harvest & s_cci_safe & s_obv_strong
 
         sC_gene = df['Max_Pct_10d'] > 8.0
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
-        sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        sC_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         sC_cpv = df['CPV'] > 0.2
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
 
@@ -447,28 +444,30 @@ class ReboundScreener:
         sG_cpv = df['CPV'] > 0.7 
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield & s_obv_strong
         
+        vol_db_ratio = 0.7 if is_market_safe else 0.6
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(5)
-        sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        sH_vol = df['成交量'] < df['Vol_MA5'] * vol_db_ratio
         df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0) & s_cci_safe
 
         return df
 
-    def ai_select_top5(self, candidates, macro_news, actual_used_strategy, strategy_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats):
+    def ai_select_top5(self, candidates, macro_news, actual_used_strategy, strategy_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats, strat_stats):
         logger.info(f"🧠 正在唤醒 AI 执行今日实战出击策略并提取反馈基因...")
         if not self.config.gemini_api_key: return {"top_5": []}
 
         past_lessons = self.load_ai_lessons()
         cand_text = ""
         for c in candidates:
-            # 🚀 注入 Alpha 得分 和 CCI，让 AI 用纯粹的理科逻辑去解读爆发力
-            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | Alpha得分:{c.get('alpha_score', 0):.1f} | CCI:{c.get('cci', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | OBV:{c.get('obv_status', '未知')}\n"
+            # 🚀 将底层的核心波动率 ATR 直接喂给 AI，用于硬核数学风控计算！
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | Alpha得分:{c.get('alpha_score', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | OBV主力流向:{c.get('obv_status', '未知')} | ATR真实波动率:{c.get('atr', 0):.2f}\n"
 
         worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
         best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
 
         prompt = f"""你是一位A股顶尖硬核量化游资总舵主。
 根据【双盲期望值(EV)赛马】与【实盘胜率动态惩罚】，今日系统锁定出击的波段策略是：【{actual_used_strategy}】！
+该策略近期理论胜率：{strat_stats.get('win_rate_15d', 0)*100:.1f}%，实盘验证胜率：{strat_stats.get('real_win_rate', 0)*100:.1f}%，理论EV期望：{strat_stats.get('ev', 0):+.2f}。
 出击理由：{strategy_reason}。
 
 ### 🚨 实盘战绩红黑榜 (必须分析归因)：
@@ -486,11 +485,13 @@ class ReboundScreener:
 ### 📊 硬核备选池 (已按多因子Alpha爆发力从高到低排序，请优先选择得分最高的！)：
 {cand_text}
 
-### 🎯 终极任务指令：
-1. 结合“红黑榜亏损教训”、“大盘流动性”，在 `ai_reflection` 给出纯粹理科/量化视角的风控研判。绝不讲虚无缥缈的故事，只谈资金与期望值。
-2. 从备选池优选最多 5 只（若大盘破位或个股 RPS 跑输大盘，宁可输出 0 只！绝不凑数盲买！）
-3. 设定科学的波段目标与破位止损价。
-4. 严禁在输出文本中带任何 [2026-xx-xx] 格式的虚假日期前缀。
+### 🎯 终极任务指令 (极度严格)：
+1. 在 `ai_reflection` 中，结合红黑榜亏损教训，给出纯粹量化视角的风控研判。
+2. 从备选池优选最多 5 只股票。如果大盘破位或个股 RPS 跑输大盘，宁可输出 0 只！绝不凑数！
+3. **⚠️ 数学级风控铁律**：你必须根据我提供给你的 `ATR真实波动率` 计算波段目标价和止损价！
+   - **atr_stop_loss**: 现价 - 1.5 * ATR (精确到小数点后2位)
+   - **atr_take_profit**: 现价 + 2.5 * ATR (精确到小数点后2位)
+4. **👿 致命隐患排查 (Devil's Advocate)**：在 `fatal_flaw_check` 字段，你必须扮演空头，毫不留情地指出这只股票当前最大的风险隐患（例如上方套牢盘、RPS跑输大盘、处于高位等）。绝不允许全是好话！
 
 请严格输出 JSON 格式：
 ```json
@@ -504,9 +505,11 @@ class ReboundScreener:
             "name": "名称",
             "strategy": "原样保留",
             "current_price": 现价,
-            "reason": "入选逻辑（必须强调 Alpha得分、RPS、CCI通道、主力资金OBV状态等硬核指标！）",
-            "target_price": "波段目标价",
-            "stop_loss": "破位止损价"
+            "quant_alpha_reason": "量化因子解读（重点剖析Alpha得分、RPS、OBV主力动向）",
+            "fundamental_catalyst": "风口逻辑与催化剂",
+            "fatal_flaw_check": "空头思维排查：该股当前最大的技术或情绪隐患是什么？(必填，必须刻薄一针见血)",
+            "atr_take_profit": "XX.XX元 (现价 + 2.5*ATR)",
+            "atr_stop_loss": "XX.XX元 (现价 - 1.5*ATR，破位无条件斩仓)"
         }}
     ]
 }}
@@ -592,12 +595,14 @@ class ReboundScreener:
 
         tournament_html = f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
-            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (环境自适应镇压 + 40%实盘断头台)</h3>
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (极寒断头台 + 环境自适应镇压)</h3>
             <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
                 <tr style="background-color: #ecf0f1;">
                     <th>战法名称</th><th>理论胜率(短/长)</th><th>实盘验证胜率</th><th>理论EV期望</th><th>惩罚后打分</th>
                 </tr>
         """
+        
+        min_win_rate_threshold = 0.45 if not is_market_safe else 0.40
         
         for s_name, stats in tournament_stats.items():
             win_rate = stats.get('win_rate', 0.0)
@@ -626,7 +631,7 @@ class ReboundScreener:
             color_ev = "red" if ev > 0 and not is_banned else "green" if ev <= 0 and not is_banned else "gray"
             
             real_win_str = f"{real_win_rate*100:.1f}%" if real_win_rate >= 0 else "样本不足"
-            if real_win_rate >= 0 and real_win_rate < 0.40: real_win_str = f"<span style='color:green;font-weight:bold;'>{real_win_str} (严重失真)</span>"
+            if real_win_rate >= 0 and real_win_rate < min_win_rate_threshold: real_win_str = f"<span style='color:green;font-weight:bold;'>{real_win_str} (严重失真)</span>"
             
             tournament_html += f"""
                 <tr style="{row_style}">
@@ -659,40 +664,46 @@ class ReboundScreener:
             <h3>🎯 终极 Alpha 出击池 (共 {target_count} 只，严格执行【{actual_used_strategy}】)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #2c3e50; color: #ffffff;">
-                    <th>代码</th><th>名称</th><th>策略标识</th><th>现价</th><th>波段防守计划</th><th>Alpha多因子逻辑</th>
+                    <th width="15%">代码/名称</th><th width="10%">现价/策略</th><th width="50%">多维深度量化逻辑 (量价 + 催化 + 隐患)</th><th width="25%">波段防守计划 (基于真实波动率 ATR)</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
+                q_reason = s.get('quant_alpha_reason', s.get('reason', '无'))
+                f_catalyst = s.get('fundamental_catalyst', '')
+                flaw = s.get('fatal_flaw_check', '')
+                
+                logic_html = f"<div style='margin-bottom:6px;'><b>【Alpha量价】</b> {q_reason}</div>"
+                if f_catalyst: logic_html += f"<div style='margin-bottom:6px;'><b>【风口催化】</b> {f_catalyst}</div>"
+                if flaw: logic_html += f"<div><b>【👿 致命隐患排查】</b> <span style='color:#c0392b;'>{flaw}</span></div>"
+                
                 top5_html += f"""
                 <tr>
-                    <td><b>{s.get('code', '')}</b></td>
-                    <td><b>{s.get('name', '')}</b></td>
-                    <td><span style="background:#e8f4f8; color:#2980b9; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 12px;">🥇 {s.get('strategy', '未定义')}</span></td>
-                    <td>{s.get('current_price', '')}</td>
-                    <td style="font-size: 13px;">🎯 止盈: {s.get('target_price', '')}<br>🛑 割肉: {s.get('stop_loss', '')}</td>
-                    <td style="font-size: 13px;">{s.get('reason', '')}</td>
+                    <td><b>{s.get('code', '')}</b><br>{s.get('name', '')}</td>
+                    <td>{s.get('current_price', '')} 元<br><br><span style="background:#e8f4f8; color:#2980b9; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 11px;">🥇 {s.get('strategy', '未定义')}</span></td>
+                    <td style="font-size: 13px; line-height: 1.5; text-align: left;">{logic_html}</td>
+                    <td style="font-size: 13px; line-height: 1.5; text-align: left;">🎯 <b>数学止盈:</b><br><span style='color:#27ae60;'>{s.get('atr_take_profit', '')}</span><br><br>🛑 <b>极限斩仓:</b><br><span style='color:#c0392b;'>{s.get('atr_stop_loss', '')}</span></td>
                 </tr>
                 """
             top5_html += "</table>"
         else:
-            top5_html = f"<p>🧊 极端冰点！受限于【大盘破位】或【理论EV为负】，AI 判定当前大势已去，强制剥夺开仓权，空仓保命！</p>"
+            top5_html = f"<p>🧊 极端冰点！受限于【大盘破位断头台】或【无MA60核心护盾标的】，AI 判定当前大势已去，强制剥夺开仓权，全员空仓保命！</p>"
 
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：多因子Alpha排序 + 大盘自适应镇压 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：极寒防飞刀 + 动态缩量锁死 ({today_str})</h2>
             {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在满血双向截断回测之上！加入了 RPS 相对大盘强度校验和 CCI 通道防飞刀！严格执行给定的割肉与止盈线！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在满血双向截断回测之上！AI 止盈止损点位基于数学模型真实波动率(ATR)严格测算，严禁盘中主观臆断！</p>
         </body>
         </html>
         """
 
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = Header(f"【多因子Alpha版】今日决战兵器：{actual_used_strategy} - {today_str}", 'utf-8')
+        msg['Subject'] = Header(f"【终极杀神满配版】今日兵器：{actual_used_strategy} - {today_str}", 'utf-8')
         
         sender_name = self.config.email_sender_name or "大数据波段系统"
         msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
@@ -722,12 +733,14 @@ class ReboundScreener:
                     strategy_tag = f"[{s.get('strategy', '实战出击策略')}] "
                     ai_ref_clean = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', ai_reflection)
                     ai_ref_short = ai_ref_clean.replace('\n', ' ')[:40]
-                    reason_with_ref = f"{strategy_tag} {s['reason']} | [AI当时定调]: {ai_ref_short}..."
+                    # 保存核心逻辑时提取量化因子
+                    reason_clean = s.get('quant_alpha_reason', s.get('reason', '无'))
+                    reason_with_ref = f"{strategy_tag} {reason_clean} | [AI定调]: {ai_ref_short}..."
                     writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', reason_with_ref])
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·多因子Alpha+环境自适应印钞机】 ==========")
+        logger.info("========== 启动【5日波段潜伏·大局观EV期望值满血印钞机】 ==========")
         
         df = self.get_market_spot()
         if df is None or df.empty: 
@@ -818,7 +831,8 @@ class ReboundScreener:
                     continue 
                     
                 tech_df = self.calculate_technical_indicators(df_kline, sh_ret_20d)
-                sig_df = self.evaluate_strategies(tech_df)
+                
+                sig_df = self.evaluate_strategies(tech_df, is_market_safe)
                 
                 actual_lookback = min(lookback_days, len(sig_df) - 60)
                 if actual_lookback < 15: continue 
@@ -873,16 +887,16 @@ class ReboundScreener:
                 v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
                 obv_status = "净流入(强)" if last['OBV'] > last['OBV_MA20'] else "净流出(弱)"
                 
-                # 🚀 极致核武：多因子 Alpha 打分系统 (取代简单的成交额排序)
                 alpha_score = (last['RPS_20d'] * 1.5) + (last['CPV'] * 20.0) + (10.0 if last['OBV'] > last['OBV_MA20'] else -10.0) + (last['MACD'] * 5.0)
-                if last['CCI'] < -100: alpha_score += 15.0 # 奖励被错杀的极端超卖股
-                if last['CCI'] > 100: alpha_score += 5.0 # 奖励强动量股
+                if last['CCI'] < -100: alpha_score += 15.0 
+                if last['CCI'] > 100: alpha_score += 5.0 
                 
                 today_signals[code] = {
                     'name': name, 'price': last['收盘'], 'pct': row['pct_chg'], 'amount': row['amount'], 
                     'v_ratio': v_ratio, 'cpv': last['CPV'], 'obv_status': obv_status,
                     'rps': last['RPS_20d'], 'ma20_slope': last['MA20_Slope'], 'cci': last['CCI'],
-                    'alpha_score': alpha_score, # 保存 Alpha 打分用于排序
+                    'atr': last['ATR'], # 🚀 将真实波动率投喂入数据库
+                    'alpha_score': alpha_score, 
                     'sig_A': last['Sig_A_Trend_Pullback'], 'sig_B': last['Sig_B_Bottom_Breakout'],
                     'sig_C': last['Sig_C_Strong_Dip'], 'sig_D': last['Sig_D_MA_Squeeze'],
                     'sig_E': last['Sig_E_Dragon_Relay'], 'sig_F': last['Sig_F_N_Shape'],
@@ -894,9 +908,11 @@ class ReboundScreener:
                 continue
 
         # =========================================================
-        # 🏆 核心：大盘环境自适应镇压 + 实盘倒逼 + EV期望值
+        # 🏆 核心：大盘环境自适应极寒镇压 + 实盘倒逼
         # =========================================================
         ranked_strategies = []
+        min_win_rate_threshold = 0.45 if not is_market_safe else 0.40
+        
         for s_name, stats in tournament_stats.items():
             trades = stats['trades']
             trades_15d = stats['trades_15d']
@@ -932,10 +948,10 @@ class ReboundScreener:
                 real_win_rate_multiplier = 1.0 
                 
                 if stats['real_win_rate'] >= 0:
-                    if stats['real_win_rate'] < 0.40:
+                    if stats['real_win_rate'] < min_win_rate_threshold:
                         real_win_rate_multiplier = max(0.1, stats['real_win_rate']) 
                         stats['is_banned'] = True
-                        logger.warning(f"🚫 实盘熔断: 【{s_name}】 真实胜率仅 {stats['real_win_rate']*100:.1f}%，永久拉黑！")
+                        logger.warning(f"🚫 极寒实盘熔断: 【{s_name}】 真实胜率仅 {stats['real_win_rate']*100:.1f}% (低于门槛 {min_win_rate_threshold*100}%)，永久拉黑！")
                     elif stats['real_win_rate'] > 0.55:
                         real_win_rate_multiplier = 1.2 
                     else:
@@ -960,10 +976,13 @@ class ReboundScreener:
                 base_score = expectancy * 0.4 + (win_rate_15d * avg_win_ret - (1-win_rate_15d)*avg_loss_ret) * 0.6 if trades_15d > 0 else expectancy * 0.5
                 final_score = base_score * real_win_rate_multiplier
                 
-                # 🚀 大盘环境自适应镇压矩阵：如果大盘破位，强行暴扣所有【激进突破类】战法的得分！
-                if not is_market_safe and s_name in ['战法B: 底部起爆', '战法E: 龙头断板', '战法G: 新高突破']:
-                    final_score *= 0.2 
-                    logger.warning(f"📉 大盘破位镇压：剥夺激进战法【{s_name}】 80% 的出击权重！")
+                if not is_market_safe:
+                    if s_name in ['战法B: 底部起爆', '战法E: 龙头断板', '战法G: 新高突破']:
+                        final_score *= 0.1 
+                        logger.warning(f"📉 大盘破位极寒镇压：彻底剥夺激进战法【{s_name}】 90% 的出击权重！")
+                    elif s_name in ['战法A: 趋势低吸', '战法C: 强庄首阴']:
+                        final_score *= 0.5 
+                        logger.warning(f"📉 弱市防守降维：【{s_name}】得分减半，严防深渊接飞刀！")
 
                 stats['win_rate'] = win_rate
                 stats['avg_ret'] = avg_ret
@@ -1008,7 +1027,8 @@ class ReboundScreener:
                         "代码": code, "名称": info['name'], "现价": info['price'],
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
                         "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", 
-                        "alpha_score": info['alpha_score'] # 改用 Alpha Score
+                        "atr": info['atr'],
+                        "alpha_score": info['alpha_score'] 
                     })
         else:
             for st in ranked_strategies:
@@ -1025,26 +1045,26 @@ class ReboundScreener:
                             "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
                             "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}",
                             "rps": info['rps'], "ma20_slope": info['ma20_slope'], "cci": info['cci'],
-                            "alpha_score": info['alpha_score'] # 🚀 加入多因子 Alpha 评分进行角逐
+                            "atr": info['atr'], # 🚀 投喂给 AI 用于目标止损计算
+                            "alpha_score": info['alpha_score'] 
                         })
                 
                 if temp_pool:
                     actual_used_strategy = s_name
                     final_pool = temp_pool
                     if s_name == overall_best_strategy:
-                        best_reason = f"避开了40%实盘胜率断头台！真实数学期望值(EV)达 {st['ev']:+.2f}，无条件印钞信号！"
+                        best_reason = f"避开了{min_win_rate_threshold*100}%实盘胜率极寒断头台！数学期望值(EV)达 {st['ev']:+.2f}，无条件印钞信号！"
                     else:
-                        best_reason = f"智能顺延！霸主轮空，切换至经受住残酷实盘拷打的【{s_name}】！"
+                        best_reason = f"智能顺延！霸主轮空或被镇压，切换至经受住严酷拷打的防守系【{s_name}】！"
                     break
 
         if not actual_used_strategy and not final_pool:
             actual_used_strategy = '强制空仓'
-            best_reason = "所有优势策略均无标的，或因实盘打脸极其严重被【断头台熔断】，宁可踏空绝不送钱！"
+            best_reason = "所有优势策略均无标的，或因实盘打脸极其严重被【断头台熔断】，宁可踏空绝不接飞刀！"
 
         logger.info(f"🎯 今日锁定实战出击策略: 【{actual_used_strategy}】 ({best_reason})")
 
         if final_pool:
-            # 🚀 降维杀器：将选出来的候选股按照 Alpha Score（爆发力得分）从高到低排序！绝不再按“盘子大不大”选股！
             final_pool = sorted(final_pool, key=lambda x: x['alpha_score'], reverse=True)
             final_top_stocks = final_pool[:5]
         else:
@@ -1055,7 +1075,11 @@ class ReboundScreener:
         ai_result = None
         if final_top_stocks:
             macro_news = self.fetch_macro_news()
-            ai_result = self.ai_select_top5(final_top_stocks, macro_news, actual_used_strategy, best_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats)
+            
+            # 提取被选中的战法数据，供 AI 结合分析
+            strat_stats = tournament_stats.get(actual_used_strategy, {})
+            
+            ai_result = self.ai_select_top5(final_top_stocks, macro_news, actual_used_strategy, best_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats, strat_stats)
             
             if ai_result and "top_5" in ai_result and len(ai_result["top_5"]) > 0:
                 self.save_todays_picks(ai_result["top_5"], ai_reflection=ai_result.get("ai_reflection", ""))
@@ -1135,22 +1159,24 @@ class ReboundScreener:
         
         return df
 
-    def evaluate_strategies(self, df):
+    def evaluate_strategies(self, df, is_market_safe):
         s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  
         s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 
         
+        s_above_ma60 = df['收盘'] > df['MA60']
+        
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
         s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
-        
         s_cci_safe = df['CCI'] < 200 
         
-        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe
-        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe & s_above_ma60
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
+        vol_squeeze_ratio = 0.8 if is_market_safe else 0.6
+
         sA_trend = df['MA20'] > df['MA60']
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
-        sA_vol = df['成交量'] < df['Vol_MA5'] * 0.8
+        sA_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         sA_cpv = df['CPV'] > 0.2 
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
@@ -1159,11 +1185,11 @@ class ReboundScreener:
         sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
         sB_pct = df['涨跌幅'] > 4.0
         sB_cpv = df['CPV'] > 0.6 
-        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & global_shield & s_obv_strong
+        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & s_rps_ok & s_anti_harvest & s_cci_safe & s_obv_strong
 
         sC_gene = df['Max_Pct_10d'] > 8.0
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
-        sC_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        sC_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         sC_cpv = df['CPV'] > 0.2
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
 
@@ -1191,9 +1217,783 @@ class ReboundScreener:
         sG_cpv = df['CPV'] > 0.7 
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield & s_obv_strong
         
+        vol_db_ratio = 0.7 if is_market_safe else 0.6
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(5)
-        sH_vol = df['成交量'] < df['Vol_MA5'] * 0.7
+        sH_vol = df['成交量'] < df['Vol_MA5'] * vol_db_ratio
+        df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0) & s_cci_safe
+
+        return df
+
+    def ai_select_top5(self, candidates, macro_news, actual_used_strategy, strategy_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats, strat_stats):
+        logger.info(f"🧠 正在唤醒 AI 执行今日实战出击策略并提取反馈基因...")
+        if not self.config.gemini_api_key: return {"top_5": []}
+
+        past_lessons = self.load_ai_lessons()
+        cand_text = ""
+        for c in candidates:
+            # 🚀 将底层的核心波动率 ATR 直接喂给 AI，用于硬核数学风控计算！
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']} | 涨幅:{c['今日涨幅']} | Alpha得分:{c.get('alpha_score', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | OBV主力流向:{c.get('obv_status', '未知')} | ATR真实波动率:{c.get('atr', 0):.2f}\n"
+
+        worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
+        best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (使用策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
+
+        prompt = f"""你是一位A股顶尖硬核量化游资总舵主。
+根据【双盲期望值(EV)赛马】与【实盘胜率动态惩罚】，今日系统锁定出击的波段策略是：【{actual_used_strategy}】！
+该策略近期理论胜率：{strat_stats.get('win_rate_15d', 0)*100:.1f}%，实盘验证胜率：{strat_stats.get('real_win_rate', 0)*100:.1f}%，理论EV期望：{strat_stats.get('ev', 0):+.2f}。
+出击理由：{strategy_reason}。
+
+### 🚨 实盘战绩红黑榜 (必须分析归因)：
+全局实盘胜率: {global_stats.get('win_rate', 0):.1f}%，总期望收益: {global_stats.get('avg_ret', 0):+.2f}%。
+💀【近期暴雷 (接盘血泪史)】: {worst_text or '无'}
+🌟【最强妖股 (盈利密码)】: {best_text or '无'}
+
+### 🌊 大势与流动性：
+两市总成交额 {market_stats.get('total_amount', 0):.0f} 亿元。今日主线风口：{top_sectors}
+大盘状态：{"【安全】稳居MA20生命线之上，可顺势做多" if is_market_safe else "【极其危险】已跌破MA20生命线，必须极度收缩防守！"}
+
+### 🧠 历史避坑铁律：
+{past_lessons}
+
+### 📊 硬核备选池 (已按多因子Alpha爆发力从高到低排序，请优先选择得分最高的！)：
+{cand_text}
+
+### 🎯 终极任务指令 (极度严格)：
+1. 在 `ai_reflection` 中，结合红黑榜亏损教训，给出纯粹量化视角的风控研判。
+2. 从备选池优选最多 5 只股票。如果大盘破位或个股 RPS 跑输大盘，宁可输出 0 只！绝不凑数！
+3. **⚠️ 数学级风控铁律**：你必须根据我提供给你的 `ATR真实波动率` 计算波段目标价和止损价！
+   - **atr_stop_loss**: 现价 - 1.5 * ATR (精确到小数点后2位)
+   - **atr_take_profit**: 现价 + 2.5 * ATR (精确到小数点后2位)
+4. **👿 致命隐患排查 (Devil's Advocate)**：在 `fatal_flaw_check` 字段，你必须扮演空头，毫不留情地指出这只股票当前最大的风险隐患（例如上方套牢盘、RPS跑输大盘、处于高位等）。绝不允许全是好话！
+
+请严格输出 JSON 格式：
+```json
+{{
+    "ai_reflection": "深刻结合【红黑榜盈亏】与【量化数据】的风控总结(纯正文)...",
+    "new_lesson_learned": "根据红黑榜提取的实战防守铁律(纯正文，无则填无)...",
+    "macro_view": "大盘资金情绪推演...",
+    "top_5": [
+        {{
+            "code": "代码",
+            "name": "名称",
+            "strategy": "原样保留",
+            "current_price": 现价,
+            "quant_alpha_reason": "量化因子解读（重点剖析Alpha得分、RPS、OBV主力动向）",
+            "fundamental_catalyst": "风口逻辑与催化剂",
+            "fatal_flaw_check": "空头思维排查：该股当前最大的技术或情绪隐患是什么？(必填，必须刻薄一针见血)",
+            "atr_take_profit": "XX.XX元 (现价 + 2.5*ATR)",
+            "atr_stop_loss": "XX.XX元 (现价 - 1.5*ATR，破位无条件斩仓)"
+        }}
+    ]
+}}
+```
+"""
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self.config.gemini_api_key)
+            model = genai.GenerativeModel(model_name=self.config.gemini_model)
+            response = model.generate_content(prompt, generation_config={"temperature": 0.4})
+            m = re.search(r'(\{.*\})', response.text, re.DOTALL)
+            json_str = m.group(1) if m else response.text
+            return json.loads(repair_json(json_str))
+        except Exception: return None
+
+    def send_email_report(self, ai_data, tournament_stats, overall_best_strategy, actual_used_strategy, target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc, global_stats):
+        logger.info("📧 正在生成最终幻想版赛马战报邮件...")
+        sender = self.config.email_sender
+        pwd = self.config.email_password
+        receivers = self.config.email_receivers or [sender]
+        
+        if not sender or not pwd: 
+            logger.error("🚨 致命错误：邮件发送被拦截！未配置 EMAIL_SENDER。系统退出。")
+            return
+
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        total_vol = market_stats.get('total_amount', 0)
+        limit_up = market_stats.get('limit_up', 0)
+        limit_down = market_stats.get('limit_down', 0)
+        trend_color = "#27ae60" if is_market_safe else "#c0392b"
+        
+        market_html = f"""
+        <div style="background-color: #f1f2f6; padding: 10px; margin-bottom: 15px; border-radius: 5px; text-align: center; font-size: 14px;">
+            🌡️ <b>今日全市场水温</b>：上涨 {market_stats.get('up',0)} 家 | 下跌 {market_stats.get('down',0)} 家 | 涨停 <span style="color:red;">{limit_up}</span> 家 | 跌停 <span style="color:green;">{limit_down}</span> 家<br>
+            🌊 <b>真实总流动性</b>：<span style="color:#2980b9; font-weight:bold;">{total_vol:.0f} 亿元</span><br>
+            🔥 <b>今日主线风口</b>：<span style="color:#d35400; font-weight:bold;">{top_sectors}</span><br>
+            📉 <b>大盘择时状态</b>：<span style="color:{trend_color}; font-weight:bold;">{market_trend_desc}</span>
+        </div>
+        """
+
+        global_ret = global_stats.get('avg_ret', 0.0)
+        g_color = "red" if global_ret > 0 else "green"
+        review_html = f"""
+        <div style="border: 2px solid #34495e; border-radius: 5px; margin-bottom: 20px;">
+            <div style="background-color: #34495e; color: white; padding: 8px 15px; font-weight: bold;">
+                📊 全局实盘跟踪沙盘 (自雷达上线以来)
+            </div>
+            <div style="padding: 10px; display: flex; justify-content: space-around; background-color: #fafafa;">
+                <div style="text-align: center;">总推演: <b style="font-size: 16px;">{global_stats.get('total_trades', 0)}</b> 支</div>
+                <div style="text-align: center;">总胜率: <b style="font-size: 16px; color:#8e44ad;">{global_stats.get('win_rate', 0):.1f}%</b></div>
+                <div style="text-align: center;">实盘总期望收益: <b style="font-size: 16px; color:{g_color};">{global_ret:+.2f}%</b></div>
+            </div>
+        </div>
+        """
+
+        if review_records:
+            avg_ret = recent_stats.get('avg_ret', 0.0)
+            win_rate = recent_stats.get('win_rate', 0.0)
+            days = recent_stats.get('days', 1)
+            color_ret = "red" if avg_ret > 0 else "green" if avg_ret < 0 else "black"
+            
+            review_html += f"""
+            <h3>⚖️ 近期实况与打脸处刑台 (近 {days} 批次核算)</h3>
+            <p>近期表现：平均波段收益 <b style="color:{color_ret}">{avg_ret:+.2f}%</b>，胜率 <b>{win_rate:.1f}%</b></p>
+            <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
+                <tr style="background-color: #f2f2f2;">
+                    <th>推演日期</th><th>名称(代码)</th><th>潜伏价</th><th>目前价</th><th>实盘损益</th><th>当时逻辑与反思</th>
+                </tr>
+            """
+            for r in review_records:
+                color = "red" if float(str(r['真实涨跌幅']).replace('%', '')) > 0 else "green"
+                review_html += f"""
+                <tr>
+                    <td><b>{r['推演日']}</b></td>
+                    <td>{r['名称']} ({r['代码']})</td>
+                    <td>{r['买入价']}</td>
+                    <td>{r['当前价']}</td>
+                    <td style="color: {color}; font-weight: bold;">{r['真实涨跌幅']}</td>
+                    <td style="font-size: 11px; color: #555; text-align: left;">{r['当时逻辑']}</td>
+                </tr>
+                """
+            review_html += "</table><hr>"
+
+        tournament_html = f"""
+        <div style="background-color: #f8f9fa; padding: 15px; border-left: 5px solid #2980b9; margin-bottom: 20px;">
+            <h3 style="margin-top: 0; color: #2980b9;">🏇 八大波段赛马榜 (极寒断头台 + 环境自适应镇压)</h3>
+            <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; width: 100%; font-size: 13px; text-align: center;">
+                <tr style="background-color: #ecf0f1;">
+                    <th>战法名称</th><th>理论胜率(短/长)</th><th>实盘验证胜率</th><th>理论EV期望</th><th>惩罚后打分</th>
+                </tr>
+        """
+        
+        min_win_rate_threshold = 0.45 if not is_market_safe else 0.40
+        
+        for s_name, stats in tournament_stats.items():
+            win_rate = stats.get('win_rate', 0.0)
+            win_rate_15d = stats.get('win_rate_15d', 0.0)
+            real_win_rate = stats.get('real_win_rate', -1.0)
+            ev = stats.get('ev', 0.0)
+            final_score = stats.get('score', 0.0)
+            is_banned = stats.get('is_banned', False)
+            
+            if is_banned:
+                row_style = "background-color: #ecf0f1; color: #95a5a6; text-decoration: line-through;"
+                medal = "⛔ [实盘拉跨熔断]"
+            elif s_name == overall_best_strategy and s_name == actual_used_strategy:
+                row_style = "background-color: #fff3cd; font-weight: bold; color: #d35400;"
+                medal = "🏆 [霸主&实战]"
+            elif s_name == overall_best_strategy:
+                row_style = "background-color: #fdfbf7; color: #7f8c8d;"
+                medal = "👑 [霸主-今日轮空]"
+            elif s_name == actual_used_strategy:
+                row_style = "background-color: #d1ecf1; font-weight: bold; color: #2980b9;"
+                medal = "🎯 [顺延出击]"
+            else:
+                row_style = ""
+                medal = ""
+                
+            color_ev = "red" if ev > 0 and not is_banned else "green" if ev <= 0 and not is_banned else "gray"
+            
+            real_win_str = f"{real_win_rate*100:.1f}%" if real_win_rate >= 0 else "样本不足"
+            if real_win_rate >= 0 and real_win_rate < min_win_rate_threshold: real_win_str = f"<span style='color:green;font-weight:bold;'>{real_win_str} (严重失真)</span>"
+            
+            tournament_html += f"""
+                <tr style="{row_style}">
+                    <td>{s_name} {medal}</td>
+                    <td>{win_rate_15d*100:.1f}% / {win_rate*100:.1f}%</td>
+                    <td>{real_win_str}</td>
+                    <td style="color: {color_ev}; font-weight: bold;">{ev:+.2f}</td>
+                    <td style="font-weight: bold;">{final_score:.2f}</td>
+                </tr>
+            """
+        tournament_html += "</table></div>"
+
+        top5_html = ""
+        if ai_data and "top_5" in ai_data and len(ai_data["top_5"]) > 0:
+            target_kelly = tournament_stats.get(actual_used_strategy, {}).get('kelly_pct', 0.0)
+            
+            clean_reflection = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', str(ai_data.get('ai_reflection', '无')))
+            clean_lesson = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', str(ai_data.get('new_lesson_learned', '无')))
+            clean_macro = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', str(ai_data.get('macro_view', '无')))
+            
+            top5_html += f"""
+            <h3>🧠 硬核多因子 AI：绝地反思与 Alpha 研判</h3>
+            <div style="background-color: #fdfbf7; padding: 15px; border-left: 5px solid #d4af37; margin-bottom: 20px;">
+                <p><b>⚖️ 温控凯利系统指令：</b>基于大盘流动性与数学EV期望测算，今日单只个股下注仓位极限控制在 <b style="color:red; font-size:16px;">{target_kelly:.1f}%</b>！</p>
+                <p><b>🔄 处刑后深刻归因：</b>{clean_reflection}</p>
+                <p><b>🔴 血泪避坑铁律：</b><span style="color:red; font-weight:bold;">{clean_lesson}</span></p>
+                <p><b>🌍 情绪推演：</b>{clean_macro}</p>
+            </div>
+            
+            <h3>🎯 终极 Alpha 出击池 (共 {target_count} 只，严格执行【{actual_used_strategy}】)</h3>
+            <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
+                <tr style="background-color: #2c3e50; color: #ffffff;">
+                    <th width="15%">代码/名称</th><th width="10%">现价/策略</th><th width="50%">多维深度量化逻辑 (量价 + 催化 + 隐患)</th><th width="25%">波段防守计划 (基于真实波动率 ATR)</th>
+                </tr>
+            """
+            for s in ai_data.get("top_5", []):
+                q_reason = s.get('quant_alpha_reason', s.get('reason', '无'))
+                f_catalyst = s.get('fundamental_catalyst', '')
+                flaw = s.get('fatal_flaw_check', '')
+                
+                logic_html = f"<div style='margin-bottom:6px;'><b>【Alpha量价】</b> {q_reason}</div>"
+                if f_catalyst: logic_html += f"<div style='margin-bottom:6px;'><b>【风口催化】</b> {f_catalyst}</div>"
+                if flaw: logic_html += f"<div><b>【👿 致命隐患排查】</b> <span style='color:#c0392b;'>{flaw}</span></div>"
+                
+                top5_html += f"""
+                <tr>
+                    <td><b>{s.get('code', '')}</b><br>{s.get('name', '')}</td>
+                    <td>{s.get('current_price', '')} 元<br><br><span style="background:#e8f4f8; color:#2980b9; padding:4px 6px; border-radius:4px; font-weight:bold; font-size: 11px;">🥇 {s.get('strategy', '未定义')}</span></td>
+                    <td style="font-size: 13px; line-height: 1.5; text-align: left;">{logic_html}</td>
+                    <td style="font-size: 13px; line-height: 1.5; text-align: left;">🎯 <b>数学止盈:</b><br><span style='color:#27ae60;'>{s.get('atr_take_profit', '')}</span><br><br>🛑 <b>极限斩仓:</b><br><span style='color:#c0392b;'>{s.get('atr_stop_loss', '')}</span></td>
+                </tr>
+                """
+            top5_html += "</table>"
+        else:
+            top5_html = f"<p>🧊 极端冰点！受限于【大盘破位断头台】或【无MA60核心护盾标的】，AI 判定当前大势已去，强制剥夺开仓权，全员空仓保命！</p>"
+
+        html_content = f"""
+        <html>
+        <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：极寒防飞刀 + 动态缩量锁死 ({today_str})</h2>
+            {market_html}
+            {review_html}
+            {tournament_html}
+            {top5_html}
+            <br>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐建立在满血双向截断回测之上！AI 止盈止损点位基于数学模型真实波动率(ATR)严格测算，严禁盘中主观臆断！</p>
+        </body>
+        </html>
+        """
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = Header(f"【终极杀神满配版】今日兵器：{actual_used_strategy} - {today_str}", 'utf-8')
+        
+        sender_name = self.config.email_sender_name or "大数据波段系统"
+        msg['From'] = formataddr((Header(sender_name, 'utf-8').encode(), sender))
+        msg['To'] = ", ".join(receivers)
+        msg.attach(MIMEText(html_content, 'html'))
+
+        try:
+            smtp_server = "smtp.qq.com" if "qq.com" in sender else "smtp.163.com" if "163.com" in sender else "smtp.gmail.com"
+            port = 465 if smtp_server != "smtp.gmail.com" else 587
+            server = smtplib.SMTP_SSL(smtp_server, port)
+            server.login(sender, pwd)
+            server.sendmail(sender, receivers, msg.as_string())
+            server.quit()
+            logger.info("✅ 终极幻想版赛马战报邮件发送成功！")
+        except Exception as e:
+            logger.error(f"❌ 邮件发送失败: {e}")
+
+    def save_todays_picks(self, top5_stocks, ai_reflection=""):
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        file_exists = os.path.exists(self.history_file)
+        try:
+            with open(self.history_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['Date_T0', 'Code', 'Name', 'Price_T0', 'Date_T1', 'Price_T1', 'Return_Pct', 'AI_Reason'])
+                for s in top5_stocks:
+                    strategy_tag = f"[{s.get('strategy', '实战出击策略')}] "
+                    ai_ref_clean = re.sub(r'\[\d{4}-\d{2}-\d{2}.*?\]:?\s*', '', ai_reflection)
+                    ai_ref_short = ai_ref_clean.replace('\n', ' ')[:40]
+                    # 保存核心逻辑时提取量化因子
+                    reason_clean = s.get('quant_alpha_reason', s.get('reason', '无'))
+                    reason_with_ref = f"{strategy_tag} {reason_clean} | [AI定调]: {ai_ref_short}..."
+                    writer.writerow([today_str, str(s['code']).zfill(6), s['name'], s['current_price'], '', '', '', reason_with_ref])
+        except: pass
+
+    def run_screen(self):
+        logger.info("========== 启动【5日波段潜伏·大局观EV期望值满血印钞机】 ==========")
+        
+        df = self.get_market_spot()
+        if df is None or df.empty: 
+            logger.error("🚨 致命错误：大盘行情数据获取失败！")
+            return
+            
+        review_summary, review_records, recent_stats, global_stats, ai_feedback_data, strategy_real_performance = self.process_review_and_history(df, lookback_batches=5)
+            
+        logger.info("👉 执行全市场流动性与风口感知...")
+        top_sectors = self.fetch_top_sectors()
+        
+        if 'amount' not in df.columns:
+            logger.error("🚨 致命错误：未能解析出 '成交额(amount)' 字段！")
+            return
+            
+        total_amount_yi = df['amount'].sum() / 1_0000_0000
+        
+        limit_down_count = len(df[df['pct_chg'] <= -9.5])
+        limit_up_count = len(df[df['pct_chg'] >= 9.5])
+        up_count = len(df[df['pct_chg'] > 0])
+        down_count = len(df[df['pct_chg'] < 0])
+        market_stats = {'up': up_count, 'down': down_count, 'limit_up': limit_up_count, 'limit_down': limit_down_count, 'total_amount': total_amount_yi}
+        
+        is_market_safe, market_trend_desc, sh_ret_20d = self.fetch_market_trend()
+        
+        is_market_crash = limit_down_count >= 50
+
+        if df['circ_mv'].sum() == 0 and self.pro:
+            try:
+                cal = self.pro.trade_cal(exchange='SSE', is_open='1', start_date=(datetime.now() - pd.Timedelta(days=10)).strftime('%Y%m%d'), end_date=datetime.now().strftime('%Y%m%d'))
+                last_date = cal.iloc[-1]['cal_date']
+                df_basic = self.pro.daily_basic(trade_date=last_date)
+                if not df_basic.empty:
+                    df_basic['code'] = df_basic['ts_code'].str[:6]
+                    df_basic['circ_mv_tushare'] = df_basic['circ_mv'] * 10000
+                    df = df.merge(df_basic[['code', 'circ_mv_tushare']], on='code', how='left')
+                    df['circ_mv'] = np.where(df['circ_mv'] == 0, df['circ_mv_tushare'].fillna(0), df['circ_mv'])
+            except: pass
+
+        df = df[~df['name'].str.contains('ST|退|B')] 
+        df = df[~df['code'].str.startswith(('8', '4', '68'))] 
+        df = df[df['close'] >= 2.0] 
+        
+        if df['circ_mv'].sum() > 0:
+            df = df[(df['circ_mv'] >= 30_0000_0000) & (df['circ_mv'] <= 500_0000_0000)]
+        df = df[df['amount'] >= 200000000]
+        
+        candidates = df.sort_values(by='amount', ascending=False).head(100)
+        logger.info(f"👉 锁定 {len(candidates)} 只主战场标的，启动防伪双向截断回测...")
+
+        tournament_stats = {
+            '战法A: 趋势低吸': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法B: 底部起爆': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法C: 强庄首阴': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法D: 均线粘合': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法E: 龙头断板': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法F: N字反包': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法G: 新高突破': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False},
+            '战法H: 缩量双底': {'trades': 0, 'wins': 0, 'returns': [], 'trades_15d': 0, 'wins_15d': 0, 'returns_15d': [], 'is_banned': False}
+        }
+        
+        today_signals = {} 
+        total_c = len(candidates)
+        lookback_days = 120
+        consecutive_errors = 0
+        
+        for i, (idx, row) in enumerate(candidates.iterrows(), 1):
+            if consecutive_errors >= 10:
+                logger.warning("🚨 连续10次获取K线失败！触发休眠退让机制，暂停 10 秒...")
+                time.sleep(10)
+                consecutive_errors = 0 
+                
+            if i % 20 == 0: logger.info(f"⏳ 满血回测进行中... 进度: {i} / {total_c}")
+                
+            code = row['code']
+            name = row['name']
+            try:
+                df_kline = self._get_daily_kline(code)
+                
+                if df_kline is None or df_kline.empty: 
+                    consecutive_errors += 1
+                    time.sleep(1)
+                    continue
+                    
+                consecutive_errors = 0 
+                
+                if len(df_kline) < 60:
+                    continue 
+                    
+                tech_df = self.calculate_technical_indicators(df_kline, sh_ret_20d)
+                
+                sig_df = self.evaluate_strategies(tech_df, is_market_safe)
+                
+                actual_lookback = min(lookback_days, len(sig_df) - 60)
+                if actual_lookback < 15: continue 
+                
+                test_df = sig_df.iloc[-(actual_lookback+5):-5].copy()
+                
+                test_df['Stop_Pct'] = (-1.5 * test_df['ATR_Pct']).clip(-15.0, -3.0)
+                test_df['Target_Pct'] = (2.5 * test_df['ATR_Pct']).clip(5.0, 20.0)
+                
+                test_df['Low_5D_Pct'] = ((test_df['Low_5D'] - test_df['收盘']) / test_df['收盘']) * 100
+                test_df['High_5D_Pct'] = ((test_df['High_5D'] - test_df['收盘']) / test_df['收盘']) * 100
+                test_df['Raw_Ret_5D'] = ((test_df['Close_T5'] - test_df['收盘']) / test_df['收盘'] - 0.003) * 100
+                
+                test_df['Ret_5D'] = np.where(
+                    test_df['Low_5D_Pct'] <= test_df['Stop_Pct'], 
+                    test_df['Stop_Pct'] - 0.5, 
+                    np.where(
+                        test_df['High_5D_Pct'] >= test_df['Target_Pct'],
+                        test_df['Target_Pct'] - 0.2, 
+                        test_df['Raw_Ret_5D']
+                    )
+                )
+                
+                test_df_15 = test_df.tail(15)
+
+                strategy_keys = [
+                    ('战法A: 趋势低吸', 'Sig_A_Trend_Pullback'), ('战法B: 底部起爆', 'Sig_B_Bottom_Breakout'), 
+                    ('战法C: 强庄首阴', 'Sig_C_Strong_Dip'), ('战法D: 均线粘合', 'Sig_D_MA_Squeeze'),
+                    ('战法E: 龙头断板', 'Sig_E_Dragon_Relay'), ('战法F: N字反包', 'Sig_F_N_Shape'),
+                    ('战法G: 新高突破', 'Sig_G_ATH_Breakout'), ('战法H: 缩量双底', 'Sig_H_Double_Bottom')
+                ]
+                
+                for s_key, col_name in strategy_keys:
+                    trades = test_df[test_df[col_name]]
+                    trades_15 = test_df_15[test_df_15[col_name]]
+                    
+                    if not trades.empty:
+                        valid_rets = trades['Ret_5D'].dropna()
+                        if not valid_rets.empty:
+                            tournament_stats[s_key]['trades'] += len(valid_rets)
+                            tournament_stats[s_key]['returns'].extend(valid_rets.tolist())
+                            tournament_stats[s_key]['wins'] += (valid_rets > 0).sum()
+                    
+                    if not trades_15.empty:
+                        valid_rets_15 = trades_15['Ret_5D'].dropna()
+                        if not valid_rets_15.empty:
+                            tournament_stats[s_key]['trades_15d'] += len(valid_rets_15)
+                            tournament_stats[s_key]['returns_15d'].extend(valid_rets_15.tolist())
+                            tournament_stats[s_key]['wins_15d'] += (valid_rets_15 > 0).sum()
+                
+                last = sig_df.iloc[-1]
+                v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
+                obv_status = "净流入(强)" if last['OBV'] > last['OBV_MA20'] else "净流出(弱)"
+                
+                alpha_score = (last['RPS_20d'] * 1.5) + (last['CPV'] * 20.0) + (10.0 if last['OBV'] > last['OBV_MA20'] else -10.0) + (last['MACD'] * 5.0)
+                if last['CCI'] < -100: alpha_score += 15.0 
+                if last['CCI'] > 100: alpha_score += 5.0 
+                
+                today_signals[code] = {
+                    'name': name, 'price': last['收盘'], 'pct': row['pct_chg'], 'amount': row['amount'], 
+                    'v_ratio': v_ratio, 'cpv': last['CPV'], 'obv_status': obv_status,
+                    'rps': last['RPS_20d'], 'ma20_slope': last['MA20_Slope'], 'cci': last['CCI'],
+                    'atr': last['ATR'], # 🚀 将真实波动率投喂入数据库
+                    'alpha_score': alpha_score, 
+                    'sig_A': last['Sig_A_Trend_Pullback'], 'sig_B': last['Sig_B_Bottom_Breakout'],
+                    'sig_C': last['Sig_C_Strong_Dip'], 'sig_D': last['Sig_D_MA_Squeeze'],
+                    'sig_E': last['Sig_E_Dragon_Relay'], 'sig_F': last['Sig_F_N_Shape'],
+                    'sig_G': last['Sig_G_ATH_Breakout'], 'sig_H': last['Sig_H_Double_Bottom']
+                }
+                time.sleep(random.uniform(0.05, 0.1))
+            except Exception as e:
+                logger.error(f"🚨 推演股票 {code} 时异常: {e}")
+                continue
+
+        # =========================================================
+        # 🏆 核心：大盘环境自适应极寒镇压 + 实盘倒逼
+        # =========================================================
+        ranked_strategies = []
+        min_win_rate_threshold = 0.45 if not is_market_safe else 0.40
+        
+        for s_name, stats in tournament_stats.items():
+            trades = stats['trades']
+            trades_15d = stats['trades_15d']
+            
+            stats['real_win_rate'] = -1.0
+            
+            s_key_short = s_name.split(':')[0].strip() 
+            s_core_name = s_name.split(':')[1].strip() if ':' in s_name else s_name 
+            
+            total_real_count = 0
+            total_real_wins = 0.0
+            
+            for r_sname, r_perf in strategy_real_performance.items():
+                if s_key_short in str(r_sname) or s_core_name in str(r_sname) or ("首阴" in str(r_sname) and "首阴" in s_core_name) or ("低吸" in str(r_sname) and "低吸" in s_core_name):
+                    total_real_count += r_perf['count']
+                    total_real_wins += (r_perf['win_rate'] / 100.0) * r_perf['count']
+
+            if total_real_count >= 1: 
+                r_win_rate = total_real_wins / total_real_count
+                stats['real_win_rate'] = r_win_rate
+
+            if trades >= 10: 
+                win_rate = stats['wins'] / trades
+                avg_ret = sum(stats['returns']) / trades
+                win_rate_15d = stats['wins_15d'] / trades_15d if trades_15d > 0 else 0
+                
+                avg_win_ret = sum([r for r in stats['returns'] if r > 0]) / stats['wins'] if stats['wins'] > 0 else 0.02
+                avg_loss_ret = abs(sum([r for r in stats['returns'] if r <= 0]) / (trades - stats['wins'])) if (trades - stats['wins']) > 0 else 0.05
+                
+                expectancy = (win_rate * avg_win_ret) - ((1 - win_rate) * avg_loss_ret)
+                stats['ev'] = expectancy
+                
+                real_win_rate_multiplier = 1.0 
+                
+                if stats['real_win_rate'] >= 0:
+                    if stats['real_win_rate'] < min_win_rate_threshold:
+                        real_win_rate_multiplier = max(0.1, stats['real_win_rate']) 
+                        stats['is_banned'] = True
+                        logger.warning(f"🚫 极寒实盘熔断: 【{s_name}】 真实胜率仅 {stats['real_win_rate']*100:.1f}% (低于门槛 {min_win_rate_threshold*100}%)，永久拉黑！")
+                    elif stats['real_win_rate'] > 0.55:
+                        real_win_rate_multiplier = 1.2 
+                    else:
+                        real_win_rate_multiplier = max(0.5, stats['real_win_rate'] + 0.3)
+                
+                if trades_15d >= 3 and win_rate_15d < 0.35:
+                    stats['is_banned'] = True
+                    logger.warning(f"🚫 短线熔断: 【{s_name}】 近期胜率仅为 {win_rate_15d*100:.1f}%！")
+                
+                odds = avg_win_ret / avg_loss_ret if avg_loss_ret > 0 else 1.0
+                kelly_fraction = win_rate - ((1 - win_rate) / odds) if avg_loss_ret > 0 else 0.99
+                
+                if not is_market_safe:
+                    kelly_fraction = kelly_fraction * 0.3 
+                elif total_amount_yi < 7000:
+                    kelly_fraction = kelly_fraction * 0.5 
+                elif total_amount_yi > 15000 and is_market_safe:
+                    kelly_fraction = kelly_fraction * 1.2 
+                    
+                kelly_pct = max(0, min(1.0, kelly_fraction)) * 100
+                
+                base_score = expectancy * 0.4 + (win_rate_15d * avg_win_ret - (1-win_rate_15d)*avg_loss_ret) * 0.6 if trades_15d > 0 else expectancy * 0.5
+                final_score = base_score * real_win_rate_multiplier
+                
+                if not is_market_safe:
+                    if s_name in ['战法B: 底部起爆', '战法E: 龙头断板', '战法G: 新高突破']:
+                        final_score *= 0.1 
+                        logger.warning(f"📉 大盘破位极寒镇压：彻底剥夺激进战法【{s_name}】 90% 的出击权重！")
+                    elif s_name in ['战法A: 趋势低吸', '战法C: 强庄首阴']:
+                        final_score *= 0.5 
+                        logger.warning(f"📉 弱市防守降维：【{s_name}】得分减半，严防深渊接飞刀！")
+
+                stats['win_rate'] = win_rate
+                stats['avg_ret'] = avg_ret
+                stats['win_rate_15d'] = win_rate_15d
+                stats['kelly_pct'] = kelly_pct
+                stats['score'] = final_score
+
+                if not stats['is_banned']:
+                    ranked_strategies.append({
+                        'name': s_name, 'score': final_score, 'trades': trades,
+                        'win_rate': win_rate, 'avg_ret': avg_ret, 'ev': expectancy
+                    })
+            else:
+                stats['score'] = 0.0
+                stats['ev'] = 0.0
+                stats['win_rate'] = 0.0
+                stats['avg_ret'] = 0.0
+                stats['win_rate_15d'] = 0.0
+                stats['kelly_pct'] = 0.0
+        
+        ranked_strategies.sort(key=lambda x: x['score'], reverse=True)
+        
+        overall_best_strategy = ranked_strategies[0]['name'] if ranked_strategies else None
+        actual_used_strategy = None
+        best_reason = ""
+        final_pool = []
+        
+        sig_map = {
+            '战法A: 趋势低吸': 'sig_A', '战法B: 底部起爆': 'sig_B',
+            '战法C: 强庄首阴': 'sig_C', '战法D: 均线粘合': 'sig_D',
+            '战法E: 龙头断板': 'sig_E', '战法F: N字反包': 'sig_F',
+            '战法G: 新高突破': 'sig_G', '战法H: 缩量双底': 'sig_H'
+        }
+
+        if is_market_crash:
+            actual_used_strategy = '战法H: 缩量双底'
+            overall_best_strategy = '市场熔断避险'
+            best_reason = f"大盘暴跌超 {limit_down_count} 家跌停！废除顺延，仅允许双底形态防御。"
+            for code, info in today_signals.items():
+                if info[sig_map[actual_used_strategy]]:
+                    final_pool.append({
+                        "代码": code, "名称": info['name'], "现价": info['price'],
+                        "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
+                        "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", 
+                        "atr": info['atr'],
+                        "alpha_score": info['alpha_score'] 
+                    })
+        else:
+            for st in ranked_strategies:
+                s_name = st['name']
+                if st['ev'] <= 0: continue 
+                
+                target_sig_key = sig_map[s_name]
+                temp_pool = []
+                
+                for code, info in today_signals.items():
+                    if info[target_sig_key]:
+                        temp_pool.append({
+                            "代码": code, "名称": info['name'], "现价": info['price'],
+                            "匹配策略": f"{s_name}", "今日涨幅": f"{info['pct']:.2f}%", 
+                            "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}",
+                            "rps": info['rps'], "ma20_slope": info['ma20_slope'], "cci": info['cci'],
+                            "atr": info['atr'], # 🚀 投喂给 AI 用于目标止损计算
+                            "alpha_score": info['alpha_score'] 
+                        })
+                
+                if temp_pool:
+                    actual_used_strategy = s_name
+                    final_pool = temp_pool
+                    if s_name == overall_best_strategy:
+                        best_reason = f"避开了{min_win_rate_threshold*100}%实盘胜率极寒断头台！数学期望值(EV)达 {st['ev']:+.2f}，无条件印钞信号！"
+                    else:
+                        best_reason = f"智能顺延！霸主轮空或被镇压，切换至经受住严酷拷打的防守系【{s_name}】！"
+                    break
+
+        if not actual_used_strategy and not final_pool:
+            actual_used_strategy = '强制空仓'
+            best_reason = "所有优势策略均无标的，或因实盘打脸极其严重被【断头台熔断】，宁可踏空绝不接飞刀！"
+
+        logger.info(f"🎯 今日锁定实战出击策略: 【{actual_used_strategy}】 ({best_reason})")
+
+        if final_pool:
+            final_pool = sorted(final_pool, key=lambda x: x['alpha_score'], reverse=True)
+            final_top_stocks = final_pool[:5]
+        else:
+            final_top_stocks = []
+            
+        self.target_count = len(final_top_stocks)
+        
+        ai_result = None
+        if final_top_stocks:
+            macro_news = self.fetch_macro_news()
+            
+            # 提取被选中的战法数据，供 AI 结合分析
+            strat_stats = tournament_stats.get(actual_used_strategy, {})
+            
+            ai_result = self.ai_select_top5(final_top_stocks, macro_news, actual_used_strategy, best_reason, review_summary, market_stats, top_sectors, is_market_safe, ai_feedback_data, global_stats, strat_stats)
+            
+            if ai_result and "top_5" in ai_result and len(ai_result["top_5"]) > 0:
+                self.save_todays_picks(ai_result["top_5"], ai_reflection=ai_result.get("ai_reflection", ""))
+                self.save_ai_lesson(ai_result.get("new_lesson_learned", ""))
+        
+        self.send_email_report(ai_result, tournament_stats, overall_best_strategy, actual_used_strategy, self.target_count, review_records, recent_stats, market_stats, top_sectors, is_market_safe, market_trend_desc, global_stats)
+        logger.info("========== 🎉 系统完美执行完毕！ ==========")
+
+    def calculate_technical_indicators(self, hist, sh_ret_20d=0.0):
+        df = hist.copy()
+        
+        for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+            
+        if '涨跌幅' not in df.columns:
+            df['涨跌幅'] = df['收盘'].pct_change() * 100
+            
+        df['MA5'] = df['收盘'].rolling(5).mean()
+        df['MA10'] = df['收盘'].rolling(10).mean()
+        df['MA20'] = df['收盘'].rolling(20).mean()
+        df['MA30'] = df['收盘'].rolling(30).mean()
+        df['MA60'] = df['收盘'].rolling(60).mean()
+        df['Vol_MA5'] = df['成交量'].rolling(5).mean()
+        
+        df['Ret_20d'] = df['收盘'].pct_change(20) * 100
+        
+        df['RPS_20d'] = df['Ret_20d'] - sh_ret_20d
+        
+        df['MA20_Slope'] = (df['MA20'] - df['MA20'].shift(3)) / df['MA20'].shift(3) * 100
+        
+        df['Std_20'] = df['收盘'].rolling(20).std()
+        df['BB_Up'] = df['MA20'] + 2 * df['Std_20']
+        
+        df['prev_close'] = df['收盘'].shift(1).fillna(df['收盘'])
+        tr1 = df['最高'] - df['最低']
+        tr2 = (df['最高'] - df['prev_close']).abs()
+        tr3 = (df['最低'] - df['prev_close']).abs()
+        df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        df['ATR'] = df['TR'].rolling(14, min_periods=1).mean()
+        df['ATR_Pct'] = (df['ATR'] / df['收盘']) * 100
+        
+        df['Max_Pct_10d'] = df['涨跌幅'].rolling(10, min_periods=1).max()
+        df['High_120d_shift'] = df['最高'].shift(1).rolling(120, min_periods=1).max()
+        df['Min_20d'] = df['最低'].rolling(20, min_periods=1).min()
+        
+        exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+        exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
+        macd_dif = exp1 - exp2
+        macd_dea = macd_dif.ewm(span=9, adjust=False).mean()
+        df['MACD'] = 2 * (macd_dif - macd_dea)
+        
+        obv = np.where(df['收盘'] > df['prev_close'], df['成交量'], 
+               np.where(df['收盘'] < df['prev_close'], -df['成交量'], 0))
+        df['OBV'] = np.cumsum(obv)
+        df['OBV_MA20'] = df['OBV'].rolling(20, min_periods=1).mean()
+        
+        df['TP'] = (df['最高'] + df['最低'] + df['收盘']) / 3
+        df['MA_TP'] = df['TP'].rolling(20, min_periods=1).mean()
+        df['MD'] = (df['TP'] - df['MA_TP']).abs().rolling(20, min_periods=1).mean().fillna(0.001)
+        df['CCI'] = (df['TP'] - df['MA_TP']) / (0.015 * df['MD'] + 0.0001)
+
+        df['CPV'] = (df['收盘'] - df['最低']) / (df['最高'] - df['最低'] + 0.0001)
+        df['Body'] = abs(df['收盘'] - df['开盘'])
+        df['Upper_Shadow'] = df['最高'] - df[['收盘', '开盘']].max(axis=1)
+        df['Avg_Body_5d'] = df['Body'].rolling(5, min_periods=1).mean().fillna(0.001) + 0.001
+        df['Avg_Upper_5d'] = df['Upper_Shadow'].rolling(5, min_periods=1).mean().fillna(0)
+
+        df['Close_T5'] = df['收盘'].shift(-5)
+        df['High_5D'] = df['最高'].shift(-1)[::-1].rolling(5, min_periods=1).max()[::-1]
+        df['Low_5D'] = df['最低'].shift(-1)[::-1].rolling(5, min_periods=1).min()[::-1]
+        
+        df['Pct_Chg_Shift1'] = df['涨跌幅'].shift(1)
+        df['Pct_Chg_Shift2'] = df['涨跌幅'].shift(2)
+        df['Pct_Chg_Shift3'] = df['涨跌幅'].shift(3)
+        df['Vol_Shift3'] = df['成交量'].shift(3)
+        df['Open_Shift3'] = df['开盘'].shift(3)
+        
+        return df
+
+    def evaluate_strategies(self, df, is_market_safe):
+        s_rps_ok = df['RPS_20d'].fillna(0) > -5.0  
+        s_ma20_up = df['MA20_Slope'].fillna(0) > -1.0 
+        
+        s_above_ma60 = df['收盘'] > df['MA60']
+        
+        s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 3.0)
+        s_not_overbought = df['收盘'] < (df['BB_Up'].fillna(float('inf')) * 1.05)
+        s_cci_safe = df['CCI'] < 200 
+        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_not_overbought & s_cci_safe & s_above_ma60
+        s_obv_strong = df['OBV'] > df['OBV_MA20']
+        
+        vol_squeeze_ratio = 0.8 if is_market_safe else 0.6
+
+        sA_trend = df['MA20'] > df['MA60']
+        sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.03
+        sA_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
+        sA_cpv = df['CPV'] > 0.2 
+        df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
+
+        sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
+        sB_break = df['收盘'] > df['MA60']
+        sB_vol = df['成交量'] > df['Vol_MA5'] * 2.0
+        sB_pct = df['涨跌幅'] > 4.0
+        sB_cpv = df['CPV'] > 0.6 
+        df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & sB_cpv & s_rps_ok & s_anti_harvest & s_cci_safe & s_obv_strong
+
+        sC_gene = df['Max_Pct_10d'] > 8.0
+        sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -6.0)
+        sC_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
+        sC_cpv = df['CPV'] > 0.2
+        df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & sC_cpv & global_shield
+
+        ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
+        ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
+        sD_squeeze = (ma_max - ma_min) / ma_min < 0.03 
+        sD_up = (df['收盘'] > ma_max) & (df['开盘'] < ma_min) & (df['涨跌幅'] > 3.0)
+        df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up & global_shield
+        
+        sE_gene = df['Pct_Chg_Shift1'] > 9.0
+        sE_pct = (df['涨跌幅'] > -5.0) & (df['涨跌幅'] < 4.0)
+        sE_vol = df['成交量'] > df['Vol_MA5'] * 1.5
+        sE_cpv = df['CPV'] > 0.4 
+        df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol & sE_cpv & global_shield
+        
+        sF_day3 = df['Pct_Chg_Shift3'] > 6.0
+        sF_day21 = (df['Pct_Chg_Shift2'] < 2.0) & (df['Pct_Chg_Shift1'] < 2.0) & (df['收盘'].shift(1) > df['Open_Shift3'])
+        sF_today = df['涨跌幅'] > 0
+        sF_vol = df['成交量'] < df['Vol_Shift3']
+        df['Sig_F_N_Shape'] = sF_day3 & sF_day21 & sF_today & sF_vol & global_shield
+        
+        sG_high = df['收盘'] >= df['High_120d_shift']
+        sG_vol = df['成交量'] > df['Vol_MA5'] * 2.0
+        sG_pct = df['涨跌幅'] > 4.0
+        sG_cpv = df['CPV'] > 0.7 
+        df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & sG_cpv & global_shield & s_obv_strong
+        
+        vol_db_ratio = 0.7 if is_market_safe else 0.6
+        sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
+        sH_macd = df['MACD'] > df['MACD'].shift(5)
+        sH_vol = df['成交量'] < df['Vol_MA5'] * vol_db_ratio
         df['Sig_H_Double_Bottom'] = sH_low & sH_macd & sH_vol & s_rps_ok & (df['MA20_Slope'].fillna(0) > -3.0) & s_cci_safe
 
         return df
