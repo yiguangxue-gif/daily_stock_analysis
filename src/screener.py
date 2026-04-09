@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股游资量化选股雷达 - 极致防站岗版 (乖离率护盾 + 引力惩罚 + 天量拦截)
+A股游资量化选股雷达 - 极致防站岗版 
+(乖离率护盾 + 引力惩罚 + 天量拦截 + 实时资讯排雷)
 ===================================
-
-核心重构:
-1. 【BIAS 乖离率护盾】：引入 20 日均线乖离率测算，偏离超过 20% 的“天上股”直接物理拉黑，拒绝高位站岗。
-2. 【高位引力暴扣】：在 Alpha 多因子打分中，乖离率大于 12% 开始阶梯式扣分，压制高位票，扶持低位起爆票。
-3. 【天量见天价拦截】：侦测极端量比 (>3.5)，对于高位爆天量的标的实施分数剥夺，防范主力派发。
 """
 
 import os
@@ -37,6 +33,7 @@ from email.utils import formataddr
 from datetime import datetime, timedelta
 from json_repair import repair_json
 
+# 注意：请确保你的 src.config 能够正常导入
 from src.config import get_config
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - 🚀 %(message)s', datefmt='%H:%M:%S')
@@ -126,6 +123,16 @@ class ReboundScreener:
         except: pass
         return True, "大盘趋势未知，按中性对待。", sh_ret_20d
 
+    # 🚀 新增：抓取个股最新资讯，供 AI 情绪排雷
+    def fetch_stock_realtime_news(self, code):
+        try:
+            news_df = self._fetch_with_retry(ak.stock_news_em, retries=1, delay=0.2, symbol=code)
+            if news_df is not None and not news_df.empty:
+                latest_news = news_df['新闻标题'].head(3).tolist()
+                return " | ".join(latest_news)
+        except Exception: pass
+        return "暂无最新重大异动资讯"
+
     def _get_daily_kline(self, code):
         start_date = (datetime.now() - timedelta(days=400)).strftime('%Y%m%d')
         end_date = datetime.now().strftime('%Y%m%d')
@@ -186,7 +193,7 @@ class ReboundScreener:
         news_text = "今日无重大宏观新闻"
         try:
             query = urllib.parse.quote("中国 A股 政策 央行")
-            url = f"https://news.google.com/rss/search?q={query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+            url = f"[https://news.google.com/rss/search?q=](https://news.google.com/rss/search?q=){query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=4) as res:
                 root = ET.fromstring(res.read())
@@ -322,7 +329,6 @@ class ReboundScreener:
 
     def calculate_technical_indicators(self, hist, sh_ret_20d=0.0):
         df = hist.copy()
-        
         for c in ['收盘', '开盘', '最高', '最低', '成交量']: 
             df[c] = pd.to_numeric(df[c], errors='coerce')
             
@@ -340,9 +346,7 @@ class ReboundScreener:
         df['RPS_20d'] = df['Ret_20d'] - sh_ret_20d
         df['MA20_Slope'] = (df['MA20'] - df['MA20'].shift(3)) / df['MA20'].shift(3) * 100
         
-        # 🚀 新增：BIAS乖离率测算，直接探测是否高高在上
         df['Bias_20'] = (df['收盘'] - df['MA20']) / df['MA20'] * 100
-        
         df['Std_20'] = df['收盘'].rolling(20).std()
         df['BB_Up'] = df['MA20'] + 2 * df['Std_20']
         
@@ -402,63 +406,55 @@ class ReboundScreener:
     def evaluate_strategies(self, df, is_market_safe):
         s_rps_ok = df['RPS_20d'].fillna(0) > -15.0  
         s_ma20_up = df['MA20_Slope'].fillna(0) > -4.0 
-        
-        # 🚀 引入核心防站岗护盾：偏离 MA20 均线超过 20% 的股票，说明已经涨上天了，直接拉黑！
         s_bias_safe = df['Bias_20'].fillna(0) < 20.0
-        
         s_anti_harvest = df['Avg_Upper_5d'] < (df['Avg_Body_5d'] * 4.0) 
         
-        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_bias_safe
+        # 🚀 极致防站岗：高位站岗拦截器！坚决不买当天涨幅超过 8% 的股票，从源头切断追高风险
+        s_not_chasing_today = df['涨跌幅'].fillna(0) < 8.0 
+        
+        global_shield = s_rps_ok & s_ma20_up & s_anti_harvest & s_bias_safe & s_not_chasing_today
         s_obv_strong = df['OBV'] > df['OBV_MA20']
         
         vol_squeeze_ratio = 0.85 if is_market_safe else 0.75 
 
-        # 战法A: 趋势低吸
         sA_trend = (df['MA20'] > df['MA60']) & (df['收盘'] > df['MA60'])
         sA_support = (abs(df['收盘'] - df['MA20']) / df['MA20']) <= 0.05 
         sA_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         sA_cpv = df['CPV'] > 0.2 
         df['Sig_A_Trend_Pullback'] = sA_trend & sA_support & sA_vol & sA_cpv & global_shield
 
-        # 战法B: 底部起爆 
         sB_base = df['收盘'].shift(1) < df['MA60'].shift(1)
         sB_break = df['收盘'] > df['MA60']
         sB_vol = df['成交量'] > df['Vol_MA5'] * 1.5 
         sB_pct = df['涨跌幅'] > 3.0
         df['Sig_B_Bottom_Breakout'] = sB_base & sB_break & sB_vol & sB_pct & global_shield & s_obv_strong
 
-        # 战法C: 强庄首阴
         sC_gene = df['Max_Pct_10d'] > 7.0 
         sC_pct = (df['涨跌幅'] < 0) & (df['涨跌幅'] >= -9.0) 
         sC_vol = df['成交量'] < df['Vol_MA5'] * vol_squeeze_ratio
         df['Sig_C_Strong_Dip'] = sC_gene & sC_pct & sC_vol & global_shield
 
-        # 战法D: 均线粘合
         ma_max = df[['MA5', 'MA10', 'MA20']].max(axis=1)
         ma_min = df[['MA5', 'MA10', 'MA20']].min(axis=1)
         sD_squeeze = (ma_max - ma_min) / ma_min < 0.05 
         sD_up = (df['收盘'] > ma_max) & (df['收盘'].shift(1) <= ma_max.shift(1)) & (df['涨跌幅'] > 2.0)
         df['Sig_D_MA_Squeeze'] = sD_squeeze & sD_up & global_shield
         
-        # 战法E: 龙头断板分歧
         sE_gene = df['涨跌幅'].shift(1) > 8.0 
         sE_pct = (df['涨跌幅'] > -6.0) & (df['涨跌幅'] < 4.0) 
         sE_vol = df['成交量'] > df['Vol_MA5'] * 1.2
         df['Sig_E_Dragon_Relay'] = sE_gene & sE_pct & sE_vol & global_shield
         
-        # 战法F: N字反包
         sF_gene = df['Max_Pct_5d_Shift1'] > 5.0 
         sF_shrink = df['Vol_Shift1'] <= df['Vol_Shift2'] * 1.1 
         sF_today = (df['涨跌幅'] > 0) & (df['收盘'] > df['开盘']) 
         df['Sig_F_N_Shape'] = sF_gene & sF_shrink & sF_today & global_shield
         
-        # 战法G: 新高突破
         sG_high = df['收盘'] >= df['High_120d_shift']
         sG_vol = df['成交量'] > df['Vol_MA5'] * 1.5
         sG_pct = df['涨跌幅'] > 3.0
         df['Sig_G_ATH_Breakout'] = sG_high & sG_vol & sG_pct & global_shield & s_obv_strong
         
-        # 战法H: 缩量双底
         vol_db_ratio = 0.7 if is_market_safe else 0.65
         sH_low = (df['收盘'] - df['Min_20d']) / df['Min_20d'] < 0.05
         sH_macd = df['MACD'] > df['MACD'].shift(3) 
@@ -474,13 +470,14 @@ class ReboundScreener:
         past_lessons = self.load_ai_lessons()
         cand_text = ""
         for c in candidates:
-            gene_str = "🔥具备涨停基因" if c.get('has_limit_up') else "无近期涨停"
-            # 🚀 将乖离率 Bias 扔给 AI，要求排查高位套牢盘
-            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']}元 | 乖离率Bias:{c.get('bias_20', 0):+.1f}% | 量比:{c.get('v_ratio', 0):.2f} | {gene_str} | Alpha得分:{c.get('alpha_score', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | 止盈:{c.get('atr_tp', 0):.2f}元 | 止损:{c.get('atr_sl', 0):.2f}元\n"
+            gene_str = "🔥具涨停基因" if c.get('has_limit_up') else "无近期涨停"
+            # 🚀 将实时新闻注入给 AI
+            cand_text += f"[{c['代码']}]{c['名称']} | 策略:{c['匹配策略']} | 现价:{c['现价']}元 | 乖离率:{c.get('bias_20', 0):+.1f}% | 量比:{c.get('v_ratio', 0):.2f} | 最新资讯: {c.get('news', '无')} | {gene_str} | Alpha得分:{c.get('alpha_score', 0):.1f} | RPS:{c.get('rps', 0):+.2f}% | 止盈:{c.get('atr_tp', 0):.2f}元 | 止损:{c.get('atr_sl', 0):.2f}元\n"
 
         worst_text = "\n".join([f"亏损 {x['Realized_Ret']:.2f}% (策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('worst', [])])
         best_text = "\n".join([f"盈利 {x['Realized_Ret']:.2f}% (策略: {x['Strategy_Name']})" for x in ai_feedback_data.get('best', [])])
 
+        # 修复了Markdown格式解析冲突问题，改用纯文本的JSON提示
         prompt = f"""你是一位A股顶尖硬核量化游资总舵主。
 根据【双盲期望值(EV)赛马】与【实盘胜率动态惩罚】，今日系统锁定出击的波段策略是：【{actual_used_strategy}】！
 该策略近期理论胜率：{strat_stats.get('win_rate_15d', 0)*100:.1f}%，实盘验证胜率：{strat_stats.get('real_win_rate', 0)*100:.1f}%，理论EV期望：{strat_stats.get('ev', 0):+.2f}。
@@ -502,13 +499,12 @@ class ReboundScreener:
 {cand_text}
 
 ### 🎯 终极任务指令 (极度严格)：
-1. 在 `ai_reflection` 中，结合红黑榜亏损教训，给出纯粹量化视角的风控研判。
+1. 在 ai_reflection 中，结合红黑榜亏损教训，给出纯粹量化视角的风控研判。
 2. 从备选池优选最多 5 只股票。
 3. ⚠️ 数学级风控铁律：必须严格照抄提供给你的【止盈】和【止损】数值！严禁瞎编！
-4. **👿 致命隐患排查 (非常重要)**：在 `fatal_flaw_check` 字段，你必须根据我提供给你的【乖离率Bias】和【量比】数据，分析该股是否存在高位派发、接盘站岗的风险！必须要刻薄！
+4. **👿 致命隐患排查 (非常重要)**：在 fatal_flaw_check 字段，你必须根据【乖离率Bias】、【量比】以及我提供给你的【最新资讯】进行排雷！如果新闻出现“减持”、“异动公告”、“立案调查”、“利好出尽（如已兑现的重组/业绩）”，必须狠狠扣分并写明风险！宁可错过，绝不接盘！
 
-请严格按照以下 JSON 格式输出：
-```json
+请严格按照以下 JSON 格式输出（不要包含任何 Markdown 代码块包裹，直接输出纯 JSON 字符串）：
 {{
     "ai_reflection": "深刻结合【红黑榜盈亏】与【量化数据】的风控总结(纯正文)...",
     "new_lesson_learned": "根据红黑榜提取的实战防守铁律(纯正文)...",
@@ -519,15 +515,14 @@ class ReboundScreener:
             "name": "名称",
             "strategy": "原样保留",
             "current_price": 现价,
-            "quant_alpha_reason": "量化因子解读（剖析Alpha得分、RPS、涨停基因）",
+            "quant_alpha_reason": "量价因子与新闻逻辑综合判定",
             "fundamental_catalyst": "风口逻辑与催化剂",
-            "fatal_flaw_check": "空头排查：该股的乖离率是否过高？是否爆了天量？上方是否有套牢盘？(必填，极度刻薄)",
+            "fatal_flaw_check": "空头排查：乖离率是否过高？量比是否异常？【最新资讯】中是否潜伏利好兑现或减持风险？(必填，极度刻薄)",
             "atr_take_profit": "XX.XX元",
             "atr_stop_loss": "XX.XX元"
         }}
     ]
 }}
-```
 """
         try:
             import google.generativeai as genai
@@ -616,8 +611,6 @@ class ReboundScreener:
                 </tr>
         """
         
-        min_win_rate_threshold = 0.30 if not is_market_safe else 0.20 
-        
         for s_name, stats in tournament_stats.items():
             win_rate = stats.get('win_rate', 0.0)
             win_rate_15d = stats.get('win_rate_15d', 0.0)
@@ -676,7 +669,7 @@ class ReboundScreener:
             <h3>🎯 防接盘 Alpha 出击池 (共 {target_count} 只，严格执行【{actual_used_strategy}】)</h3>
             <table border="1" cellspacing="0" cellpadding="8" style="border-collapse: collapse; width: 100%;">
                 <tr style="background-color: #2c3e50; color: #ffffff;">
-                    <th width="15%">代码/名称</th><th width="10%">现价/策略</th><th width="50%">多维深度量化逻辑 (量价 + 催化 + 隐患)</th><th width="25%">波段防守计划 (基于真实波动率 ATR)</th>
+                    <th width="15%">代码/名称</th><th width="10%">现价/策略</th><th width="50%">多维深度量化逻辑 (量价 + 资讯催化 + 隐患排雷)</th><th width="25%">波段防守计划 (真实波动率 ATR)</th>
                 </tr>
             """
             for s in ai_data.get("top_5", []):
@@ -703,13 +696,13 @@ class ReboundScreener:
         html_content = f"""
         <html>
         <body style="font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：极致防站岗版 + EV数学期望定调 ({today_str})</h2>
+            <h2 style="color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 10px;">📉 A股终极量化：极致防站岗版 + 实时新闻排雷 ({today_str})</h2>
             {market_html}
             {review_html}
             {tournament_html}
             {top5_html}
             <br>
-            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐已通过【20%绝对乖离率护盾】及【天量扣分检测】！AI 止盈止损点位基于数学模型真实波动率(ATR)严格测算，严禁盘中主观追高！</p>
+            <p style="font-size: 12px; color: #999; text-align: center;">💡 核心纪律：所有推荐已通过【禁止当天追高护盾】及【实时减持/异动排雷检测】！AI 止盈止损点位基于数学模型真实波动率(ATR)严格测算，严禁盘中主观追高！</p>
         </body>
         </html>
         """
@@ -729,7 +722,7 @@ class ReboundScreener:
             server.login(sender, pwd)
             server.sendmail(sender, receivers, msg.as_string())
             server.quit()
-            logger.info("✅ 终极幻想版赛马战报邮件发送成功！")
+            logger.info("✅ 终极防站岗版战报邮件发送成功！")
         except Exception as e:
             logger.error(f"❌ 邮件发送失败: {e}")
 
@@ -751,7 +744,7 @@ class ReboundScreener:
         except: pass
 
     def run_screen(self):
-        logger.info("========== 启动【5日波段潜伏·极致防站岗避雷印钞机】 ==========")
+        logger.info("========== 启动【5日波段潜伏·极致防接盘避雷印钞机】 ==========")
         
         df = self.get_market_spot()
         if df is None or df.empty: 
@@ -859,8 +852,7 @@ class ReboundScreener:
                     }])
                     df_kline = pd.concat([df_kline, new_row], ignore_index=True)
                 
-                if len(df_kline) < 60:
-                    continue 
+                if len(df_kline) < 60: continue 
                     
                 tech_df = self.calculate_technical_indicators(df_kline, sh_ret_20d)
                 sig_df = self.evaluate_strategies(tech_df, is_market_safe)
@@ -918,15 +910,21 @@ class ReboundScreener:
                 v_ratio = (last['成交量'] / last['Vol_MA5']) if last['Vol_MA5'] > 0 else 1.0
                 obv_status = "净流入(强)" if last['OBV'] > last['OBV_MA20'] else "净流出(弱)"
                 
-                # 🚀 极致防站岗：乖离率超过12%起疯狂扣分，量比异常扣分
+                # 🚀 极致防站岗：修改 Alpha 打分权重，不给当天涨停板过高权重
                 bias_20 = last['Bias_20']
                 alpha_score = (last['RPS_20d'] * 1.5) + (last['CPV'] * 15.0) + (10.0 if last['OBV'] > last['OBV_MA20'] else -10.0) + (last['MACD'] * 5.0)
-                if last['Has_Limit_Up']: alpha_score += 30.0 
+                
+                # 如果历史有涨停，且今天涨幅不是奔着涨停去的，才适度加分
+                if last['Has_Limit_Up'] and last['涨跌幅'] < 9.0: 
+                    alpha_score += 15.0 
                 
                 if bias_20 > 12.0:
-                    alpha_score -= (bias_20 - 12.0) * 4.0 # 每超出1%，扣除4分！严防偏离过高
+                    alpha_score -= (bias_20 - 12.0) * 4.0
                 if v_ratio > 3.5:
-                    alpha_score -= 25.0 # 天量派发惩罚，防止接盘
+                    alpha_score -= 25.0
+                
+                # 🚀 动态获取个股最新新闻，供 AI 审查
+                realtime_news = self.fetch_stock_realtime_news(code)
                 
                 atr_val = last['ATR']
                 math_take_profit = spot_price + (2.5 * atr_val)
@@ -936,6 +934,7 @@ class ReboundScreener:
                     'name': name, 'price': spot_price, 'pct': row['pct_chg'], 'amount': row['amount'], 
                     'v_ratio': v_ratio, 'cpv': last['CPV'], 'obv_status': obv_status,
                     'rps': last['RPS_20d'], 'has_limit_up': last['Has_Limit_Up'], 'bias_20': bias_20,
+                    'news': realtime_news, # 将新闻数据挂载
                     'atr': atr_val, 'atr_tp': math_take_profit, 'atr_sl': math_stop_loss,
                     'alpha_score': alpha_score, 
                     'sig_A': last['Sig_A_Trend_Pullback'], 'sig_B': last['Sig_B_Bottom_Breakout'],
@@ -957,7 +956,6 @@ class ReboundScreener:
         for s_name, stats in tournament_stats.items():
             trades = stats['trades']
             trades_15d = stats['trades_15d']
-            
             stats['real_win_rate'] = -1.0
             
             s_key_short = s_name.split(':')[0].strip() 
@@ -1067,7 +1065,7 @@ class ReboundScreener:
                         "匹配策略": f"🛡️ {actual_used_strategy}", "今日涨幅": f"{info['pct']:.2f}%", 
                         "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}", 
                         "atr_tp": info['atr_tp'], "atr_sl": info['atr_sl'], "has_limit_up": info['has_limit_up'],
-                        "bias_20": info['bias_20'],
+                        "bias_20": info['bias_20'], "news": info['news'],
                         "alpha_score": info['alpha_score'] 
                     })
         else:
@@ -1086,6 +1084,7 @@ class ReboundScreener:
                             "量比": f"{info['v_ratio']:.2f}", "主力(OBV)": info['obv_status'], "重心CPV": f"{info['cpv']:.2f}",
                             "rps": info['rps'], "has_limit_up": info['has_limit_up'], "bias_20": info['bias_20'],
                             "atr_tp": info['atr_tp'], "atr_sl": info['atr_sl'], 
+                            "news": info['news'], # 必须带上新闻数据
                             "alpha_score": info['alpha_score'] 
                         })
                 
